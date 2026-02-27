@@ -1,8 +1,11 @@
 "use client";
 
+import { useI18n } from "@/i18n/context";
 import TerminalDemo from "./TerminalDemo";
 
 export default function Hero() {
+  const { t } = useI18n();
+
   return (
     <section className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden px-6">
       <div
@@ -18,14 +21,13 @@ export default function Hero() {
 
       <div className="relative z-10 mx-auto max-w-3xl text-center">
         <h1 className="animate-fade-up font-sans text-4xl font-bold leading-tight tracking-tight sm:text-5xl md:text-6xl lg:text-7xl">
-          Nothing ships.
+          {t.hero.h1a}
           <br />
-          <span className="text-[#6ee7b7]">Everything emerges.</span>
+          <span className="text-[#6ee7b7]">{t.hero.h1b}</span>
         </h1>
 
         <p className="animate-fade-up-delay-1 mx-auto mt-6 max-w-xl font-sans text-base leading-relaxed text-[#8b8b8b] sm:text-lg">
-          An empty screen. A single intelligence. Every person who connects
-          teaches it something new. The app doesn&apos;t exist until you speak.
+          {t.hero.desc}
         </p>
 
         <div className="animate-fade-up-delay-2 mt-10">
@@ -33,7 +35,7 @@ export default function Hero() {
             href="#"
             className="rounded-xl bg-[#6ee7b7] px-8 py-3 font-mono text-sm font-bold tracking-wide text-[#0a0a0a] transition hover:bg-[#5dd4a6]"
           >
-            JOIN THE BRAIN
+            {t.hero.cta}
           </a>
         </div>
       </div>
@@ -43,7 +45,7 @@ export default function Hero() {
       </div>
 
       <p className="relative z-10 mt-12 animate-fade-up-delay-3 font-mono text-[10px] tracking-[3px] text-[#2a2a2a]">
-        PRIVATE CONVERSATIONS. COLLECTIVE WISDOM.
+        {t.hero.tagline}
       </p>
     </section>
   );

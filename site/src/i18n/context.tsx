@@ -15,8 +15,13 @@ function detectLocale(): Locale {
   if (typeof window === "undefined") return "en";
   const saved = localStorage.getItem("locale");
   if (saved && saved in translations) return saved as Locale;
-  const browserLang = navigator.language.slice(0, 2);
-  if (browserLang in translations) return browserLang as Locale;
+  const lang = navigator.language;
+  if (lang.startsWith("zh")) {
+    const region = lang.toLowerCase();
+    if (region === "zh-tw" || region === "zh-hk" || region === "zh-mo")
+      return "zh-TW";
+    return "zh-CN";
+  }
   return "en";
 }
 

@@ -1,29 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
-
-const LINES = [
-  { type: "user", text: "> Show me what the team logged yesterday" },
-  { type: "agent", text: "Searching shared memory..." },
-  { type: "tool", text: "[memory] 3 entries from 2 contributors" },
-  { type: "agent", text: "Rod deployed the API. Mia filed the compliance doc. Alex fixed the auth bug." },
-  { type: "gap", text: "" },
-  { type: "user", text: "> Build me a project tracker based on that" },
-  { type: "agent", text: "Generating tracker from collective context..." },
-  { type: "tool", text: "[canvas] Rendering UI surface" },
-  { type: "agent", text: "Done. Live on your canvas — pre-filled with what everyone contributed." },
-  { type: "gap", text: "" },
-  { type: "user", text: "> Remember: deployments need sign-off from Rod" },
-  { type: "agent", text: "Written to shared memory. All users will know." },
-];
+import { useI18n } from "@/i18n/context";
 
 export default function TerminalDemo() {
+  const { t, locale } = useI18n();
+  const lines = t.terminal.lines;
   const [visibleLines, setVisibleLines] = useState(0);
 
   useEffect(() => {
+    setVisibleLines(0);
     const timer = setInterval(() => {
       setVisibleLines((prev) => {
-        if (prev >= LINES.length) {
+        if (prev >= lines.length) {
           clearInterval(timer);
           return prev;
         }
@@ -31,7 +20,7 @@ export default function TerminalDemo() {
       });
     }, 600);
     return () => clearInterval(timer);
-  }, []);
+  }, [locale, lines.length]);
 
   return (
     <div className="overflow-hidden rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] shadow-2xl shadow-black/50">
@@ -45,7 +34,7 @@ export default function TerminalDemo() {
       </div>
 
       <div className="p-4 font-mono text-xs leading-6 sm:p-6 sm:text-sm sm:leading-7">
-        {LINES.slice(0, visibleLines).map((line, i) => {
+        {lines.slice(0, visibleLines).map((line, i) => {
           if (line.type === "gap") return <div key={i} className="h-3" />;
 
           if (line.type === "user")
@@ -72,7 +61,7 @@ export default function TerminalDemo() {
 
           return null;
         })}
-        {visibleLines < LINES.length && (
+        {visibleLines < lines.length && (
           <span className="cursor-blink inline-block text-[#6ee7b7]" />
         )}
       </div>
