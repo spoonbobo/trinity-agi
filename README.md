@@ -1,32 +1,60 @@
-# Trinity AGI — Universal Command Center
+# Trinity
 
-A "featureless" agentic shell powered by [OpenClaw](https://docs.openclaw.ai).
-The UI is a blank canvas; the agent and user build functionality together at runtime.
+An agentic shell powered by [OpenClaw](https://docs.openclaw.ai).
+The UI starts as a blank canvas — the agent and user build functionality together at runtime.
 
-## Architecture
+## Prerequisites
 
-- **OpenClaw Gateway** (Docker) — agent engine, multi-provider LLM, tools, governance, sessions, multi-channel messaging.
-- **Flutter Web Shell** — blank canvas host, A2UI renderer, voice input, governance panel.
-- **nginx** — serves Flutter build, proxies WebSocket + API to the Gateway.
+- Docker Desktop (with Compose v2)
+- An LLM provider API key (OpenAI, Anthropic, Google, etc.)
 
-## Quick Start
+## Deployment
 
-1. Install Docker Desktop (with Compose v2) and have an LLM provider API key ready.
-2. `cp web/.env.example web/.env` and fill in your keys.
-3. Build the frontend: `docker compose -f web/docker-compose.yml --profile build run --rm frontend-builder`
-4. Start the stack: `docker compose -f web/docker-compose.yml up -d`
-5. Open http://localhost for the Trinity Shell, or http://localhost:18789 for the OpenClaw dashboard.
+### 1. Configure environment
 
-## Repository Structure
+```bash
+cp web/.env.example web/.env
+```
 
-- **`web/`** — The command center application (Flutter frontend + OpenClaw Gateway, orchestrated with Docker Compose).
-- **`site/`** — The public marketing website (Next.js, Tailwind CSS, dark theme).
+Edit `web/.env` and set a gateway token:
 
-## How It Works
+```
+OPENCLAW_GATEWAY_TOKEN=<your-token>
+```
 
-1. The Flutter shell connects to OpenClaw Gateway via WebSocket.
-2. User types or speaks a request in the prompt bar.
-3. OpenClaw runs the agent (LLM + tools) and streams responses back.
-4. The agent can push interactive A2UI surfaces to the Canvas.
-5. High-risk actions trigger approval gates in the Governance panel.
-6. Users can also interact via WhatsApp, Telegram, Discord, and other channels.
+Generate one with `openssl rand -hex 32` if needed.
+
+### 2. Build the frontend
+
+```bash
+docker compose -f web/docker-compose.yml --profile build build --no-cache frontend-builder
+docker compose -f web/docker-compose.yml --profile build run --rm frontend-builder
+```
+
+This compiles the Flutter web app and copies the static files into a shared Docker volume.
+
+### 3. Start the stack
+
+```bash
+docker compose -f web/docker-compose.yml up -d
+```
+
+### 4. Configure LLM providers
+
+Open the OpenClaw dashboard at http://localhost:18789 and add your LLM provider API keys.
+
+### 5. Use Trinity
+
+Open http://localhost in your browser.
+
+### Rebuilding after code changes
+
+```bash
+docker compose -f web/docker-compose.yml --profile build build --no-cache frontend-builder
+docker compose -f web/docker-compose.yml --profile build run --rm frontend-builder
+docker compose -f web/docker-compose.yml restart nginx
+```
+
+## License
+
+See [LICENSE](LICENSE) if present, or contact the maintainers.

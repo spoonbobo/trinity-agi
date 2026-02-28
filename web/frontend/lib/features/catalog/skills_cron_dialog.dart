@@ -32,6 +32,8 @@ class _SkillsCronDialogState extends ConsumerState<SkillsCronDialog> {
   bool _clawhubSearching = false;
   String? _clawhubError;
   List<Map<String, String>> _clawhubResults = [];
+  String? _inspectingSkill;
+  Map<String, dynamic>? _inspectData;
 
   String _stripAnsi(String input) {
     final ansi = RegExp(r'\x1B\[[0-9;]*[A-Za-z]');
@@ -317,6 +319,151 @@ class _SkillsCronDialogState extends ConsumerState<SkillsCronDialog> {
         _installingSkill = null;
       });
     }
+  }
+
+  Future<void> _inspectClawhubSkill(String slug) async {
+    final client = ref.read(terminalClientProvider);
+    if (slug.isEmpty) return;
+
+    setState(() {
+      _inspectingSkill = slug;
+      _inspectData = null;
+    });
+
+    try {
+      final raw = await client.executeCommandForOutput(
+        'clawhub inspect $slug --json',
+        timeout: const Duration(seconds: 30),
+      );
+
+      final cleaned = _stripAnsi(raw).trim();
+      // Find the first '{' to skip any leading text like "- Fetching skill"
+      final jsonStart = cleaned.indexOf('{');
+      if (jsonStart < 0) {
+        if (!mounted) return;
+        setState(() {
+          _inspectingSkill = null;
+        });
+        return;
+      }
+      final jsonStr = cleaned.substring(jsonStart);
+      final data = jsonDecode(jsonStr) as Map<String, dynamic>;
+
+      if (!mounted) return;
+      setState(() {
+        _inspectData = data;
+        _inspectingSkill = null;
+      });
+      _showInspectDialog(slug, data);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _inspectingSkill = null;
+        _clawhubError = 'inspect failed: $e';
+      });
+    }
+  }
+
+  void _showInspectDialog(String slug, Map<String, dynamic> data) {
+    final t = ShellTokens.of(context);
+    final theme = Theme.of(context);
+    final skill = data['skill'] as Map<String, dynamic>? ?? {};
+    final owner = data['owner'] as Map<String, dynamic>? ?? {};
+    final latestVersion = data['latestVersion'] as Map<String, dynamic>? ?? {};
+
+    final displayName = (skill['displayName'] ?? slug).toString();
+    final summary = (skill['summary'] ?? '').toString();
+    final ownerHandle = (owner['handle'] ?? '').toString();
+    final version = (latestVersion['version'] ?? '').toString();
+    final changelog = (latestVersion['changelog'] ?? '').toString();
+    final stats = skill['stats'] as Map<String, dynamic>? ?? {};
+    final downloads = stats['downloads'] ?? 0;
+    final installs = stats['installsCurrent'] ?? stats['installsAllTime'] ?? 0;
+    final stars = stats['stars'] ?? 0;
+
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => Dialog(
+        backgroundColor: t.surfaceBase,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: BorderSide(color: t.border, width: 0.5),
+        ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520, maxHeight: 480),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Header: name + close
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        displayName,
+                        style: theme.textTheme.titleMedium?.copyWith(color: t.fgPrimary),
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: () => Navigator.of(ctx).pop(),
+                      child: Text('x', style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary)),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                // Slug + version + author
+                Text(
+                  [
+                    slug,
+                    if (version.isNotEmpty) 'v$version',
+                    if (ownerHandle.isNotEmpty) 'by $ownerHandle',
+                  ].join('  '),
+                  style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary),
+                ),
+                const SizedBox(height: 4),
+                // Stats row
+                Text(
+                  [
+                    '$downloads downloads',
+                    '$installs installs',
+                    '$stars stars',
+                  ].join('  '),
+                  style: theme.textTheme.labelSmall?.copyWith(color: t.fgMuted),
+                ),
+                const SizedBox(height: 12),
+                // Summary
+                if (summary.isNotEmpty) ...[
+                  Text(
+                    summary,
+                    style: theme.textTheme.bodyMedium?.copyWith(color: t.fgPrimary),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                // Changelog
+                if (changelog.isNotEmpty) ...[
+                  Text(
+                    'changelog',
+                    style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary),
+                  ),
+                  const SizedBox(height: 4),
+                  Flexible(
+                    child: SingleChildScrollView(
+                      child: Text(
+                        changelog,
+                        style: theme.textTheme.bodySmall?.copyWith(color: t.fgMuted),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   List<Map<String, dynamic>> _slicePage(List<Map<String, dynamic>> rows, int page) {
@@ -650,6 +797,16 @@ class _SkillsCronDialogState extends ConsumerState<SkillsCronDialog> {
               style: theme.textTheme.bodyMedium?.copyWith(color: t.fgPrimary),
             ),
           ),
+          GestureDetector(
+            onTap: _inspectingSkill == slug ? null : () => _inspectClawhubSkill(slug),
+            child: Text(
+              _inspectingSkill == slug ? 'loading...' : 'detail',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: _inspectingSkill == slug ? t.fgDisabled : t.fgTertiary,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
           GestureDetector(
             onTap: installing ? null : () => _installClawhubSkill(row),
             child: Text(

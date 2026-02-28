@@ -30,8 +30,5 @@
     ]
   },
   "defaultRoles": ["trinity_user"],
-  "userFederation": [],
-  "components": {
-    "org.keycloak.storage.UserStorageProvider": []
-  }
+  "components": {}
 }

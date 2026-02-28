@@ -33,7 +33,7 @@ services:
       GOTRUE_API_PORT: 9999
       API_EXTERNAL_URL: ${API_EXTERNAL_URL:-http://localhost}
       GOTRUE_DB_DRIVER: postgres
-      GOTRUE_DB_DATABASE_URL: postgres://postgres:${SUPABASE_POSTGRES_PASSWORD:-86f8df7b8a5bd91b093baa52f985cdd7}@supabase-db:5432/supabase?sslmode=disable
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${SUPABASE_POSTGRES_PASSWORD:-86f8df7b8a5bd91b093baa52f985cdd7}@supabase-db:5432/supabase?sslmode=disable
       GOTRUE_SITE_URL: ${SITE_URL:-http://localhost}
       GOTRUE_URI_ALLOW_LIST: ""
       GOTRUE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-9e2254f6b1dccfe9db011eedba5a7c67e7fccc0d2d4b12b08f7f0cb8525a0f32}
