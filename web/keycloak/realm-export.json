@@ -1,0 +1,37 @@
+{
+  "realm": "trinity",
+  "enabled": true,
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "sslRequired": "none",
+  "clients": [
+    {
+      "clientId": "trinity-shell",
+      "name": "Trinity AGI Shell",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "trinity-shell-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": ["http://localhost/*", "http://localhost:80/*"],
+      "webOrigins": ["http://localhost"],
+      "attributes": {
+        "post.logout.redirect.uris": "http://localhost/*"
+      }
+    }
+  ],
+  "roles": {
+    "realm": [
+      { "name": "trinity_guest", "description": "Guest role" },
+      { "name": "trinity_user", "description": "Standard user" },
+      { "name": "trinity_admin", "description": "Administrator" }
+    ]
+  },
+  "defaultRoles": ["trinity_user"],
+  "userFederation": [],
+  "components": {
+    "org.keycloak.storage.UserStorageProvider": []
+  }
+}

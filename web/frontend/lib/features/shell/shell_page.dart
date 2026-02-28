@@ -7,7 +7,8 @@ import '../../core/terminal_client.dart';
 import '../../core/theme.dart';
 import '../../core/i18n.dart';
 import '../../models/ws_frame.dart';
-import '../../main.dart' show languageProvider;
+import '../../core/auth_client.dart';
+import '../../main.dart' show languageProvider, authClientProvider;
 import '../prompt_bar/prompt_bar.dart';
 import '../chat/chat_stream.dart';
 import '../canvas/a2ui_renderer.dart';
@@ -178,7 +179,10 @@ class _ShellPageState extends ConsumerState<ShellPage> {
               ],
             ),
           ),
-          PromptBar(enabled: isConnected),
+          PromptBar(
+            enabled: isConnected &&
+                ref.read(authClientProvider).state.hasPermission('chat.send'),
+          ),
         ],
       ),
     );

@@ -1,4 +1,103 @@
 services:
+  # ─── Supabase Postgres ────────────────────────────────────────────────
+  supabase-db:
+    image: supabase/postgres:15.8.1.127
+    container_name: trinity-supabase-db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    volumes:
+      - supabase-db-data:/var/lib/postgresql/data
+      - ./supabase/migrations:/docker-entrypoint-initdb.d/rbac:ro
+    environment:
+      POSTGRES_PASSWORD: ${SUPABASE_POSTGRES_PASSWORD:-86f8df7b8a5bd91b093baa52f985cdd7}
+      POSTGRES_DB: supabase
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - trinity
+
+  # ─── Supabase GoTrue (Auth) ───────────────────────────────────────────
+  supabase-auth:
+    image: supabase/gotrue:v2.170.0
+    container_name: trinity-supabase-auth
+    restart: unless-stopped
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      API_EXTERNAL_URL: ${API_EXTERNAL_URL:-http://localhost}
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://postgres:${SUPABASE_POSTGRES_PASSWORD:-86f8df7b8a5bd91b093baa52f985cdd7}@supabase-db:5432/supabase?sslmode=disable
+      GOTRUE_SITE_URL: ${SITE_URL:-http://localhost}
+      GOTRUE_URI_ALLOW_LIST: ""
+      GOTRUE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-9e2254f6b1dccfe9db011eedba5a7c67e7fccc0d2d4b12b08f7f0cb8525a0f32}
+      GOTRUE_JWT_EXP: 3600
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_DISABLE_SIGNUP: "false"
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+      GOTRUE_SMS_AUTOCONFIRM: "true"
+      # Keycloak OIDC
+      GOTRUE_EXTERNAL_KEYCLOAK_ENABLED: "true"
+      GOTRUE_EXTERNAL_KEYCLOAK_CLIENT_ID: trinity-shell
+      GOTRUE_EXTERNAL_KEYCLOAK_SECRET: ${KEYCLOAK_CLIENT_SECRET:-trinity-shell-secret}
+      GOTRUE_EXTERNAL_KEYCLOAK_URL: http://keycloak:8080/realms/trinity
+      GOTRUE_EXTERNAL_KEYCLOAK_REDIRECT_URI: ${API_EXTERNAL_URL:-http://localhost}/supabase/auth/v1/callback
+    networks:
+      - trinity
+
+  # ─── Keycloak (LDAP/AD federation + OIDC) ─────────────────────────────
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.1
+    container_name: trinity-keycloak
+    restart: unless-stopped
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_HEALTH_ENABLED: "true"
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-a34013d0f1e1edfc7407c769}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://supabase-db:5432/supabase
+      KC_DB_USERNAME: postgres
+      KC_DB_PASSWORD: ${SUPABASE_POSTGRES_PASSWORD:-86f8df7b8a5bd91b093baa52f985cdd7}
+      KC_DB_SCHEMA: keycloak
+      KC_HTTP_RELATIVE_PATH: /keycloak
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/trinity-realm.json:ro
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    networks:
+      - trinity
+
+  # ─── Auth Service (JWT verify + RBAC resolution) ───────────────────────
+  auth-service:
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile
+    container_name: trinity-auth-service
+    restart: unless-stopped
+    environment:
+      AUTH_SERVICE_PORT: 18791
+      JWT_SECRET: ${SUPABASE_JWT_SECRET:-9e2254f6b1dccfe9db011eedba5a7c67e7fccc0d2d4b12b08f7f0cb8525a0f32}
+      POSTGRES_HOST: supabase-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: supabase
+      POSTGRES_PASSWORD: ${SUPABASE_POSTGRES_PASSWORD:-86f8df7b8a5bd91b093baa52f985cdd7}
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    networks:
+      - trinity
+
+  # ─── OpenClaw Gateway ──────────────────────────────────────────────────
   openclaw-gateway:
     image: openclaw:local
     build:
@@ -24,6 +123,7 @@ services:
     networks:
       - trinity
 
+  # ─── Terminal Proxy ────────────────────────────────────────────────────
   terminal-proxy:
     build:
       context: ./terminal-proxy
@@ -34,6 +134,7 @@ services:
       - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}
       - OPENCLAW_CONTAINER_NAME=trinity-openclaw
       - TERMINAL_PROXY_PORT=18790
+      - JWT_SECRET=${SUPABASE_JWT_SECRET:-9e2254f6b1dccfe9db011eedba5a7c67e7fccc0d2d4b12b08f7f0cb8525a0f32}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
@@ -42,6 +143,7 @@ services:
     networks:
       - trinity
 
+  # ─── Frontend Builder (profile: build) ─────────────────────────────────
   frontend-builder:
     build:
       context: ./frontend
@@ -49,12 +151,15 @@ services:
       args:
         GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
         TERMINAL_WS_URL: ws://localhost/terminal/
+        AUTH_SERVICE_URL: http://localhost
+        SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzcyMjcwMDU0LCJleHAiOjE5Mjk5NTAwNTR9.U1xu4Was-iunrn8oXeA-2n8hMpCgcDVhiGXxndiB3TU}
     container_name: trinity-flutter-builder
     volumes:
       - flutter-build:/output
     profiles:
       - build
 
+  # ─── nginx ─────────────────────────────────────────────────────────────
   nginx:
     image: nginx:alpine
     container_name: trinity-nginx
@@ -69,12 +174,17 @@ services:
         condition: service_healthy
       terminal-proxy:
         condition: service_started
+      auth-service:
+        condition: service_started
+      supabase-auth:
+        condition: service_started
     networks:
       - trinity
 
 volumes:
   openclaw-data:
   flutter-build:
+  supabase-db-data:
 
 networks:
   trinity:

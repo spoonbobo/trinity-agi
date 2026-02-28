@@ -3,11 +3,22 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/theme.dart';
 import 'core/i18n.dart';
+import 'core/auth_client.dart';
 import 'features/shell/shell_page.dart';
+import 'features/auth/auth_guard.dart';
 
 final themeModeProvider = StateProvider<ThemeMode>((ref) => loadThemeMode());
 final fontFamilyProvider = StateProvider<AppFontFamily>((ref) => loadAppFontFamily());
 final languageProvider = StateProvider<AppLanguage>((ref) => loadAppLanguage());
+
+const _authBaseUrl = String.fromEnvironment(
+  'AUTH_SERVICE_URL',
+  defaultValue: 'http://localhost',
+);
+
+final authClientProvider = ChangeNotifierProvider<AuthClient>((ref) {
+  return AuthClient(authServiceBaseUrl: _authBaseUrl);
+});
 
 void main() {
   runApp(const ProviderScope(child: TrinityApp()));
@@ -39,7 +50,7 @@ class TrinityApp extends ConsumerWidget {
       themeMode: mode,
       theme: buildTheme(lightTokens, Brightness.light, fontFamily),
       darkTheme: buildTheme(darkTokens, Brightness.dark, fontFamily),
-      home: const ShellPage(),
+      home: const AuthGuard(child: ShellPage()),
     );
   }
 }

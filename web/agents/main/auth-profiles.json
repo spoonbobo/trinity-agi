@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "profiles": {
+    "venice:default": {
+      "type": "api_key",
+      "provider": "venice",
+      "key": "VENICE-INFERENCE-KEY-AHP8yD0P76pwgs0nlmT944Vwdsc0aFpudyHguslUub"
+    }
+  },
+  "usageStats": {
+    "venice:default": {
+      "lastUsed": 1772253774310,
+      "errorCount": 0
+    }
+  }
+}

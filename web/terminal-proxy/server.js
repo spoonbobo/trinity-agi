@@ -9,7 +9,51 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 const PORT = process.env.TERMINAL_PROXY_PORT || 18790;
 const GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN;
+const JWT_SECRET = process.env.JWT_SECRET;
 const OPENCLAW_CONTAINER = process.env.OPENCLAW_CONTAINER_NAME || 'trinity-openclaw';
+
+// Command tiers by role
+const COMMAND_TIERS = {
+  safe: [
+    'status', 'health', 'models',
+    'skills list', 'skills list --json',
+    'crons list', 'crons list --json', 'cron list', 'cron list --json',
+    'cat /home/node/.openclaw/workspace/MEMORY.md',
+  ],
+  standard: [
+    'doctor', 'skills', 'cron',
+    'clawhub', 'sessions list', 'logs', 'channels', 'tools', 'memory',
+    'config get', 'config validate',
+  ],
+  privileged: [
+    'doctor --fix', 'configure', 'onboard', 'dashboard',
+    'config set',
+  ],
+};
+
+function roleToTier(role) {
+  switch (role) {
+    case 'superadmin':
+    case 'admin':
+      return 'privileged';
+    case 'user':
+      return 'standard';
+    default:
+      return 'safe';
+  }
+}
+
+function isCommandAllowedForTier(cleanCmd, tier) {
+  const allTiers = ['safe', 'standard', 'privileged'];
+  const tierIndex = allTiers.indexOf(tier);
+  // Collect all allowed commands up to this tier
+  const allowed = [];
+  for (let i = 0; i <= tierIndex; i++) {
+    allowed.push(...(COMMAND_TIERS[allTiers[i]] || []));
+  }
+  const baseCmd = cleanCmd.split(' ')[0];
+  return allowed.some(a => cleanCmd.startsWith(a) || baseCmd === a.split(' ')[0]);
+}
 
 const docker = new Docker();
 
@@ -191,6 +235,7 @@ wss.on('connection', (ws, req) => {
   
   let currentProcess = null;
   let authenticated = false;
+  let userRole = 'guest';
   
   ws.on('message', (message) => {
     try {
@@ -198,13 +243,35 @@ wss.on('connection', (ws, req) => {
       
       switch (data.type) {
         case 'auth':
+          // Accept gateway token (legacy) or JWT with role
           if (data.token === GATEWAY_TOKEN) {
             authenticated = true;
+            userRole = data.role || 'admin'; // legacy gateway token = admin
             ws.send(JSON.stringify({
               type: 'auth',
               status: 'ok',
+              role: userRole,
               message: 'Authenticated successfully'
             }));
+          } else if (data.jwt && JWT_SECRET) {
+            try {
+              const jwt = require('jsonwebtoken');
+              const decoded = jwt.verify(data.jwt, JWT_SECRET);
+              authenticated = true;
+              userRole = data.role || decoded.user_role || decoded.role || 'user';
+              ws.send(JSON.stringify({
+                type: 'auth',
+                status: 'ok',
+                role: userRole,
+                message: 'Authenticated via JWT'
+              }));
+            } catch (jwtErr) {
+              ws.send(JSON.stringify({
+                type: 'auth',
+                status: 'error',
+                message: 'Invalid JWT'
+              }));
+            }
           } else {
             ws.send(JSON.stringify({
               type: 'auth',
@@ -224,6 +291,21 @@ wss.on('connection', (ws, req) => {
           }
           
           if (data.command) {
+            // Check command tier authorization
+            const tier = roleToTier(userRole);
+            const validation = validateCommand(data.command);
+            if (!isCommandAllowedForTier(validation.cleanCmd, tier)) {
+              ws.send(JSON.stringify({
+                type: 'error',
+                message: `Permission denied: "${validation.cleanCmd}" requires higher access (your role: ${userRole})`
+              }));
+              ws.send(JSON.stringify({
+                type: 'exit',
+                code: 1,
+                message: 'Permission denied'
+              }));
+              break;
+            }
             currentProcess = executeCommand(ws, data.command, GATEWAY_TOKEN);
           }
           break;
