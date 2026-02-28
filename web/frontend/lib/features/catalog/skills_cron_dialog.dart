@@ -2,11 +2,19 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme.dart';
-import '../../core/terminal_client.dart';
 import '../shell/shell_page.dart' show terminalClientProvider;
 
+enum CatalogTab { skills, crons }
+
+enum SkillsCategory { ready, notReady, templates }
+
 class SkillsCronDialog extends ConsumerStatefulWidget {
-  const SkillsCronDialog({super.key});
+  final CatalogTab initialTab;
+
+  const SkillsCronDialog({
+    super.key,
+    this.initialTab = CatalogTab.skills,
+  });
 
   @override
   ConsumerState<SkillsCronDialog> createState() => _SkillsCronDialogState();
@@ -15,16 +23,21 @@ class SkillsCronDialog extends ConsumerStatefulWidget {
 class _SkillsCronDialogState extends ConsumerState<SkillsCronDialog> {
   bool _loading = false;
   String? _error;
+
+  CatalogTab _tab = CatalogTab.skills;
+  SkillsCategory _skillsCategory = SkillsCategory.ready;
+
   List<Map<String, dynamic>> _skills = [];
   List<Map<String, dynamic>> _cronJobs = [];
 
   int _skillsPage = 0;
   int _cronPage = 0;
-  static const int _pageSize = 12;
+  static const int _pageSize = 14;
 
   @override
   void initState() {
     super.initState();
+    _tab = widget.initialTab;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadData();
     });
@@ -117,14 +130,36 @@ class _SkillsCronDialogState extends ConsumerState<SkillsCronDialog> {
     return rows.sublist(start, end);
   }
 
+  bool _isTemplate(Map<String, dynamic> skill) {
+    final source = (skill['source'] ?? '').toString().toLowerCase();
+    final kind = (skill['kind'] ?? '').toString().toLowerCase();
+    final name = (skill['name'] ?? '').toString().toLowerCase();
+    return source.contains('template') ||
+        kind.contains('template') ||
+        name.contains('template');
+  }
+
+  List<Map<String, dynamic>> _skillsForCategory() {
+    switch (_skillsCategory) {
+      case SkillsCategory.ready:
+        return _skills.where((s) => s['eligible'] == true && !_isTemplate(s)).toList();
+      case SkillsCategory.notReady:
+        return _skills.where((s) => s['eligible'] != true && !_isTemplate(s)).toList();
+      case SkillsCategory.templates:
+        return _skills.where(_isTemplate).toList();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = ShellTokens.of(context);
     final theme = Theme.of(context);
-    final skillsPages = (_skills.length / _pageSize).ceil().clamp(1, 9999);
+
+    final categoryRows = _skillsForCategory();
+    final skillsPages = (categoryRows.length / _pageSize).ceil().clamp(1, 9999);
     final cronPages = (_cronJobs.length / _pageSize).ceil().clamp(1, 9999);
 
-    final skillsPageRows = _slicePage(_skills, _skillsPage);
+    final skillsPageRows = _slicePage(categoryRows, _skillsPage);
     final cronPageRows = _slicePage(_cronJobs, _cronPage);
 
     return Dialog(
@@ -146,7 +181,19 @@ class _SkillsCronDialogState extends ConsumerState<SkillsCronDialog> {
               ),
               child: Row(
                 children: [
-                  Text('skills / cron', style: theme.textTheme.bodyLarge),
+                  _topToggle('skills', _tab == CatalogTab.skills, () {
+                    setState(() {
+                      _tab = CatalogTab.skills;
+                      _skillsPage = 0;
+                    });
+                  }),
+                  const SizedBox(width: 12),
+                  _topToggle('crons', _tab == CatalogTab.crons, () {
+                    setState(() {
+                      _tab = CatalogTab.crons;
+                      _cronPage = 0;
+                    });
+                  }),
                   const SizedBox(width: 12),
                   if (_loading)
                     Text(
@@ -175,69 +222,16 @@ class _SkillsCronDialogState extends ConsumerState<SkillsCronDialog> {
               ),
             ),
             Expanded(
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _sectionHeader(
-                          title: 'skills (${_skills.length})',
-                          page: _skillsPage,
-                          pages: skillsPages,
-                          onPrev: _skillsPage > 0
-                              ? () => setState(() => _skillsPage -= 1)
-                              : null,
-                          onNext: _skillsPage + 1 < skillsPages
-                              ? () => setState(() => _skillsPage += 1)
-                              : null,
-                        ),
-                        Expanded(
-                          child: ListView(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                            children: skillsPageRows.map(_skillRow).toList(),
-                          ),
-                        ),
-                      ],
+              child: _tab == CatalogTab.skills
+                  ? _buildSkillsView(
+                      skillsPageRows: skillsPageRows,
+                      pages: skillsPages,
+                      totalRows: categoryRows.length,
+                    )
+                  : _buildCronsView(
+                      cronPageRows: cronPageRows,
+                      pages: cronPages,
                     ),
-                  ),
-                  Container(width: 0.5, color: t.border),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _sectionHeader(
-                          title: 'cron (${_cronJobs.length})',
-                          page: _cronPage,
-                          pages: cronPages,
-                          onPrev: _cronPage > 0
-                              ? () => setState(() => _cronPage -= 1)
-                              : null,
-                          onNext: _cronPage + 1 < cronPages
-                              ? () => setState(() => _cronPage += 1)
-                              : null,
-                        ),
-                        Expanded(
-                          child: _cronJobs.isEmpty
-                              ? Padding(
-                                  padding: const EdgeInsets.all(12),
-                                  child: Text(
-                                    'no cron jobs configured',
-                                    style: theme.textTheme.bodyMedium?.copyWith(
-                                      color: t.fgPlaceholder,
-                                    ),
-                                  ),
-                                )
-                              : ListView(
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                  children: cronPageRows.map(_cronRow).toList(),
-                                ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
             ),
           ],
         ),
@@ -245,49 +239,170 @@ class _SkillsCronDialogState extends ConsumerState<SkillsCronDialog> {
     );
   }
 
-  Widget _sectionHeader({
-    required String title,
-    required int page,
+  Widget _buildSkillsView({
+    required List<Map<String, dynamic>> skillsPageRows,
     required int pages,
-    required VoidCallback? onPrev,
-    required VoidCallback? onNext,
+    required int totalRows,
   }) {
     final t = ShellTokens.of(context);
     final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: t.border, width: 0.5)),
-      ),
-      child: Row(
-        children: [
-          Text(title, style: theme.textTheme.bodyMedium?.copyWith(color: t.fgPrimary)),
-          const Spacer(),
-          GestureDetector(
-            onTap: onPrev,
-            child: Text(
-              'prev',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: onPrev == null ? t.fgDisabled : t.accentPrimary,
-              ),
-            ),
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: t.border, width: 0.5)),
           ),
-          const SizedBox(width: 10),
-          Text(
-            '${page + 1}/$pages',
+          child: Row(
+            children: [
+              _categoryToggle('ready', _skillsCategory == SkillsCategory.ready, () {
+                setState(() {
+                  _skillsCategory = SkillsCategory.ready;
+                  _skillsPage = 0;
+                });
+              }),
+              const SizedBox(width: 10),
+              _categoryToggle('not ready', _skillsCategory == SkillsCategory.notReady, () {
+                setState(() {
+                  _skillsCategory = SkillsCategory.notReady;
+                  _skillsPage = 0;
+                });
+              }),
+              const SizedBox(width: 10),
+              _categoryToggle('templates', _skillsCategory == SkillsCategory.templates, () {
+                setState(() {
+                  _skillsCategory = SkillsCategory.templates;
+                  _skillsPage = 0;
+                });
+              }),
+              const Spacer(),
+              Text(
+                '${_skillsPage + 1}/$pages',
+                style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary),
+              ),
+              const SizedBox(width: 10),
+              _pageControl('prev', _skillsPage > 0, () {
+                setState(() => _skillsPage -= 1);
+              }),
+              const SizedBox(width: 8),
+              _pageControl('next', _skillsPage + 1 < pages, () {
+                setState(() => _skillsPage += 1);
+              }),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          child: Text(
+            'skills ($totalRows)',
             style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary),
           ),
-          const SizedBox(width: 10),
-          GestureDetector(
-            onTap: onNext,
-            child: Text(
-              'next',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: onNext == null ? t.fgDisabled : t.accentPrimary,
-              ),
-            ),
+        ),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            children: skillsPageRows.map(_skillRow).toList(),
           ),
-        ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCronsView({
+    required List<Map<String, dynamic>> cronPageRows,
+    required int pages,
+  }) {
+    final t = ShellTokens.of(context);
+    final theme = Theme.of(context);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: t.border, width: 0.5)),
+          ),
+          child: Row(
+            children: [
+              Text(
+                'cron jobs (${_cronJobs.length})',
+                style: theme.textTheme.bodyMedium?.copyWith(color: t.fgPrimary),
+              ),
+              const Spacer(),
+              Text(
+                '${_cronPage + 1}/$pages',
+                style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary),
+              ),
+              const SizedBox(width: 10),
+              _pageControl('prev', _cronPage > 0, () {
+                setState(() => _cronPage -= 1);
+              }),
+              const SizedBox(width: 8),
+              _pageControl('next', _cronPage + 1 < pages, () {
+                setState(() => _cronPage += 1);
+              }),
+            ],
+          ),
+        ),
+        Expanded(
+          child: _cronJobs.isEmpty
+              ? Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Text(
+                    'no cron jobs configured',
+                    style: theme.textTheme.bodyMedium?.copyWith(color: t.fgPlaceholder),
+                  ),
+                )
+              : ListView(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  children: cronPageRows.map(_cronRow).toList(),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _topToggle(String label, bool active, VoidCallback onTap) {
+    final t = ShellTokens.of(context);
+    final theme = Theme.of(context);
+    return GestureDetector(
+      onTap: onTap,
+      child: Text(
+        label,
+        style: theme.textTheme.bodyMedium?.copyWith(
+          color: active ? t.accentPrimary : t.fgMuted,
+        ),
+      ),
+    );
+  }
+
+  Widget _categoryToggle(String label, bool active, VoidCallback onTap) {
+    final t = ShellTokens.of(context);
+    final theme = Theme.of(context);
+    return GestureDetector(
+      onTap: onTap,
+      child: Text(
+        label,
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: active ? t.accentPrimary : t.fgMuted,
+        ),
+      ),
+    );
+  }
+
+  Widget _pageControl(String label, bool enabled, VoidCallback onTap) {
+    final t = ShellTokens.of(context);
+    final theme = Theme.of(context);
+    return GestureDetector(
+      onTap: enabled ? onTap : null,
+      child: Text(
+        label,
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: enabled ? t.accentPrimary : t.fgDisabled,
+        ),
       ),
     );
   }

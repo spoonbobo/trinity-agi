@@ -137,60 +137,30 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
     final theme = Theme.of(context);
     final t = ShellTokens.of(context);
 
-    final header = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: t.border, width: 0.5)),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.grid_view_rounded, size: 13, color: t.fgTertiary),
-          const SizedBox(width: 6),
-          Text(
-            'canvas',
-            style: theme.textTheme.labelSmall?.copyWith(color: t.fgMuted),
-          ),
-        ],
-      ),
-    );
-
     if (_surfaces.isEmpty) {
-      return Column(
-        children: [
-          header,
-          Expanded(
-            child: Center(
-              child: Text(
-                'canvas',
-                style: theme.textTheme.bodyMedium?.copyWith(color: t.fgPlaceholder),
-              ),
-            ),
-          ),
-        ],
+      return Center(
+        child: Icon(
+          Icons.grid_view_rounded,
+          size: 14,
+          color: t.fgPlaceholder.withOpacity(0.9),
+        ),
       );
     }
 
-    return Column(
-      children: [
-        header,
-        Expanded(
-          child: ListView(
-            padding: const EdgeInsets.all(12),
-            children: _surfaces.values.map((surface) {
-              if (surface.rootId == null) return const SizedBox.shrink();
-              final rootComponent = surface.components.where(
-                (c) => c.id == surface.rootId,
-              );
-              if (rootComponent.isEmpty) return const SizedBox.shrink();
-              return _renderComponent(
-                rootComponent.first,
-                surface.components,
-                theme,
-              );
-            }).toList(),
-          ),
-        ),
-      ],
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: _surfaces.values.map((surface) {
+        if (surface.rootId == null) return const SizedBox.shrink();
+        final rootComponent = surface.components.where(
+          (c) => c.id == surface.rootId,
+        );
+        if (rootComponent.isEmpty) return const SizedBox.shrink();
+        return _renderComponent(
+          rootComponent.first,
+          surface.components,
+          theme,
+        );
+      }).toList(),
     );
   }
 

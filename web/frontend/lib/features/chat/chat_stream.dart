@@ -403,11 +403,10 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
 
     if (_entries.isEmpty && !_agentThinking) {
       return Center(
-        child: Text(
-          'ready.',
-          style: theme.textTheme.bodyMedium?.copyWith(
-            color: t.fgDisabled,
-          ),
+        child: Icon(
+          Icons.terminal_rounded,
+          size: 14,
+          color: t.fgPlaceholder,
         ),
       );
     }

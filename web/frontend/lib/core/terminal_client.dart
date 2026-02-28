@@ -117,6 +117,7 @@ class TerminalProxyClient extends ChangeNotifier {
           break;
 
         case 'error':
+          _isExecuting = false;
           _outputs.add(TerminalOutput(
             type: 'error',
             message: data['message'] as String,

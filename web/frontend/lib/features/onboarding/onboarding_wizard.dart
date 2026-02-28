@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme.dart';
@@ -6,7 +5,7 @@ import '../../core/terminal_client.dart';
 import '../terminal/terminal_view.dart';
 import '../shell/shell_page.dart' show terminalClientProvider;
 
-enum OnboardingStep { welcome, status, configure, catalog, terminal }
+enum OnboardingStep { welcome, status, configure, terminal }
 
 class OnboardingWizard extends ConsumerStatefulWidget {
   final VoidCallback? onComplete;
@@ -27,10 +26,6 @@ class _OnboardingWizardState extends ConsumerState<OnboardingWizard> {
   final PageController _pageController = PageController();
   bool _isConnecting = false;
   String? _connectionError;
-  bool _catalogLoading = false;
-  String? _catalogError;
-  List<Map<String, dynamic>> _skills = [];
-  List<Map<String, dynamic>> _cronJobs = [];
 
   @override
   void initState() {
@@ -38,9 +33,6 @@ class _OnboardingWizardState extends ConsumerState<OnboardingWizard> {
     _currentStep = widget.initialStep;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _connectTerminal();
-      if (_currentStep == OnboardingStep.catalog) {
-        _loadCatalog();
-      }
       _pageController.jumpToPage(_currentStep.index);
     });
   }
@@ -60,7 +52,6 @@ class _OnboardingWizardState extends ConsumerState<OnboardingWizard> {
     try {
       final client = ref.read(terminalClientProvider);
       await client.connect();
-
       await Future.delayed(const Duration(milliseconds: 500));
 
       if (client.isAuthenticated) {
@@ -85,18 +76,14 @@ class _OnboardingWizardState extends ConsumerState<OnboardingWizard> {
   void _nextStep() {
     final nextIndex = _currentStep.index + 1;
     if (nextIndex < OnboardingStep.values.length) {
-      final nextStep = OnboardingStep.values[nextIndex];
       setState(() {
-        _currentStep = nextStep;
+        _currentStep = OnboardingStep.values[nextIndex];
       });
       _pageController.animateToPage(
         nextIndex,
         duration: const Duration(milliseconds: 200),
         curve: Curves.easeOut,
       );
-      if (nextStep == OnboardingStep.catalog && _skills.isEmpty && !_catalogLoading) {
-        _loadCatalog();
-      }
     } else {
       widget.onComplete?.call();
     }
@@ -125,82 +112,6 @@ class _OnboardingWizardState extends ConsumerState<OnboardingWizard> {
       duration: const Duration(milliseconds: 200),
       curve: Curves.easeOut,
     );
-    if (step == OnboardingStep.catalog && _skills.isEmpty && !_catalogLoading) {
-      _loadCatalog();
-    }
-  }
-
-  Map<String, dynamic> _decodeJsonFromOutput(String raw) {
-    final trimmed = raw.trim();
-    if (trimmed.isEmpty) return <String, dynamic>{};
-    try {
-      final parsed = jsonDecode(trimmed);
-      if (parsed is Map<String, dynamic>) return parsed;
-    } catch (_) {}
-
-    final start = trimmed.indexOf('{');
-    final end = trimmed.lastIndexOf('}');
-    if (start >= 0 && end > start) {
-      final sliced = trimmed.substring(start, end + 1);
-      final parsed = jsonDecode(sliced);
-      if (parsed is Map<String, dynamic>) return parsed;
-    }
-    throw FormatException('No JSON object found in command output');
-  }
-
-  Future<void> _loadCatalog() async {
-    final client = ref.read(terminalClientProvider);
-    if (!client.isAuthenticated) {
-      setState(() {
-        _catalogError = 'terminal not connected';
-      });
-      return;
-    }
-
-    setState(() {
-      _catalogLoading = true;
-      _catalogError = null;
-    });
-
-    try {
-      final skillsRaw = await client.executeCommandForOutput(
-        'skills list --json',
-        timeout: const Duration(seconds: 45),
-      );
-      final cronRaw = await client.executeCommandForOutput(
-        'cron list --json',
-        timeout: const Duration(seconds: 30),
-      );
-
-      final skillsObj = _decodeJsonFromOutput(skillsRaw);
-      final cronObj = _decodeJsonFromOutput(cronRaw);
-
-      final parsedSkills = ((skillsObj['skills'] as List?) ?? const [])
-          .whereType<Map>()
-          .map((e) => e.map((k, v) => MapEntry(k.toString(), v)))
-          .toList();
-      final parsedJobs = ((cronObj['jobs'] as List?) ?? const [])
-          .whereType<Map>()
-          .map((e) => e.map((k, v) => MapEntry(k.toString(), v)))
-          .toList();
-
-      if (!mounted) return;
-      setState(() {
-        _skills = parsedSkills;
-        _cronJobs = parsedJobs;
-        _catalogError = null;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _catalogError = 'failed to load catalog: $e';
-      });
-    } finally {
-      if (!mounted) return;
-      setState(() {
-        _catalogLoading = false;
-      });
-    }
   }
 
   @override
@@ -221,7 +132,6 @@ class _OnboardingWizardState extends ConsumerState<OnboardingWizard> {
                       _buildWelcomeStep(),
                       _buildStatusStep(),
                       _buildConfigureStep(),
-                      _buildCatalogStep(),
                       _buildTerminalStep(),
                     ],
                   ),
@@ -294,141 +204,9 @@ class _OnboardingWizardState extends ConsumerState<OnboardingWizard> {
         return 'status';
       case OnboardingStep.configure:
         return 'configure';
-      case OnboardingStep.catalog:
-        return 'catalog';
       case OnboardingStep.terminal:
         return 'terminal';
     }
-  }
-
-  Widget _buildCatalogStep() {
-    final theme = Theme.of(context);
-    final t = ShellTokens.of(context);
-    final ready = _skills.where((s) => s['eligible'] == true).toList();
-    final missing = _skills.where((s) => s['eligible'] != true).toList();
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            border: Border(bottom: BorderSide(color: t.border, width: 0.5)),
-          ),
-          child: Row(
-            children: [
-              Text(
-                'skills + cron',
-                style: theme.textTheme.bodyMedium?.copyWith(color: t.fgPrimary),
-              ),
-              const SizedBox(width: 12),
-              if (_catalogLoading)
-                Text(
-                  'loading...',
-                  style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary),
-                ),
-              const Spacer(),
-              GestureDetector(
-                onTap: _catalogLoading ? null : _loadCatalog,
-                child: Text(
-                  'refresh',
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: _catalogLoading ? t.fgDisabled : t.accentPrimary,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        if (_catalogError != null)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Text(
-              _catalogError!,
-              style: theme.textTheme.bodyMedium?.copyWith(color: t.statusError),
-            ),
-          ),
-        Expanded(
-          child: ListView(
-            padding: const EdgeInsets.all(12),
-            children: [
-              Text(
-                'skills (${_skills.length})  ready (${ready.length})  missing (${missing.length})',
-                style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary),
-              ),
-              const SizedBox(height: 8),
-              ...ready.map((s) => _skillRow(s, true)),
-              ...missing.map((s) => _skillRow(s, false)),
-              const SizedBox(height: 16),
-              Text(
-                'cron jobs (${_cronJobs.length})',
-                style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary),
-              ),
-              const SizedBox(height: 8),
-              if (_cronJobs.isEmpty)
-                Text(
-                  'no cron jobs configured',
-                  style: theme.textTheme.bodyMedium?.copyWith(color: t.fgPlaceholder),
-                )
-              else
-                ..._cronJobs.map(_cronRow),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _skillRow(Map<String, dynamic> skill, bool ready) {
-    final theme = Theme.of(context);
-    final t = ShellTokens.of(context);
-    final name = (skill['name'] ?? 'unknown').toString();
-    final desc = (skill['description'] ?? '').toString();
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '${ready ? 'ready' : 'missing'}  $name',
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: ready ? t.accentPrimary : t.fgMuted,
-            ),
-          ),
-          if (desc.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(left: 14),
-              child: Text(
-                desc,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: t.fgTertiary,
-                  fontSize: 12,
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _cronRow(Map<String, dynamic> job) {
-    final theme = Theme.of(context);
-    final t = ShellTokens.of(context);
-    final id = (job['id'] ?? '').toString();
-    final schedule = (job['schedule'] ?? '').toString();
-    final command = (job['command'] ?? job['task'] ?? '').toString();
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Text(
-        '${id.isNotEmpty ? id : '(job)'}  ${schedule.isNotEmpty ? schedule : '-'}  ${command.isNotEmpty ? command : ''}',
-        style: theme.textTheme.bodyMedium?.copyWith(
-          color: t.fgTertiary,
-          fontSize: 12,
-        ),
-      ),
-    );
   }
 
   Widget _buildErrorView() {
@@ -536,7 +314,6 @@ class _OnboardingWizardState extends ConsumerState<OnboardingWizard> {
     return Consumer(
       builder: (context, ref, child) {
         final client = ref.watch(terminalClientProvider);
-
         return TerminalView(
           client: client,
           showInput: false,
@@ -598,9 +375,7 @@ class _OnboardingWizardState extends ConsumerState<OnboardingWizard> {
       child: Text(
         label,
         style: theme.textTheme.bodyMedium?.copyWith(
-          color: client.isExecuting
-              ? t.fgDisabled
-              : t.accentPrimary,
+          color: client.isExecuting ? t.fgDisabled : t.accentPrimary,
           fontSize: 12,
         ),
       ),
@@ -611,7 +386,6 @@ class _OnboardingWizardState extends ConsumerState<OnboardingWizard> {
     return Consumer(
       builder: (context, ref, child) {
         final client = ref.watch(terminalClientProvider);
-
         return TerminalView(
           client: client,
           showInput: true,
@@ -649,9 +423,7 @@ class _OnboardingWizardState extends ConsumerState<OnboardingWizard> {
             child: Text(
               _currentStep == OnboardingStep.terminal ? 'done' : 'next',
               style: theme.textTheme.bodyMedium?.copyWith(
-                color: _isConnecting
-                    ? t.fgDisabled
-                    : t.accentPrimary,
+                color: _isConnecting ? t.fgDisabled : t.accentPrimary,
               ),
             ),
           ),

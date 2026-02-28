@@ -20,6 +20,12 @@ const ALLOWED_COMMANDS = [
   'doctor',
   'doctor --fix',
   'models',
+  'skills',
+  'skills list',
+  'skills list --json',
+  'cron',
+  'cron list',
+  'cron list --json',
   'configure',
   'onboard',
   'dashboard',
@@ -66,6 +72,11 @@ function executeCommand(ws, cmd, token) {
       type: 'error',
       message: `Command not allowed: ${validation.cleanCmd}. Only OpenClaw commands are permitted.`
     }));
+    ws.send(JSON.stringify({
+      type: 'exit',
+      code: 1,
+      message: 'Command rejected'
+    }));
     return;
   }
 
@@ -73,6 +84,11 @@ function executeCommand(ws, cmd, token) {
     ws.send(JSON.stringify({
       type: 'error',
       message: 'Invalid authentication token'
+    }));
+    ws.send(JSON.stringify({
+      type: 'exit',
+      code: 1,
+      message: 'Authentication failed'
     }));
     return;
   }

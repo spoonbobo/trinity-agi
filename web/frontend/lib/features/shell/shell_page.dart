@@ -96,11 +96,19 @@ class _ShellPageState extends ConsumerState<ShellPage> {
     );
   }
 
-  void _showSkillsCronDialog() {
+  void _showSkillsDialog() {
     showDialog(
       context: context,
       barrierDismissible: true,
-      builder: (context) => const SkillsCronDialog(),
+      builder: (context) => const SkillsCronDialog(initialTab: CatalogTab.skills),
+    );
+  }
+
+  void _showCronsDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => const SkillsCronDialog(initialTab: CatalogTab.crons),
     );
   }
 
@@ -214,8 +222,13 @@ class _ShellPageState extends ConsumerState<ShellPage> {
           ),
           const SizedBox(width: 14),
           GestureDetector(
-            onTap: _showSkillsCronDialog,
-            child: Text('catalog', style: labelStyle),
+            onTap: _showSkillsDialog,
+            child: Text('skills', style: labelStyle),
+          ),
+          const SizedBox(width: 14),
+          GestureDetector(
+            onTap: _showCronsDialog,
+            child: Text('crons', style: labelStyle),
           ),
         ],
       ),
