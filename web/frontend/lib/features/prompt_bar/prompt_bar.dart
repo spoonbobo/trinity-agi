@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme.dart';
-import '../shell/shell_page.dart';
+import '../../core/providers.dart';
 import 'voice_input.dart';
 
 class PromptBar extends ConsumerStatefulWidget {

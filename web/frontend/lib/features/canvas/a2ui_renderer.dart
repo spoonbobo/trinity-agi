@@ -5,7 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme.dart';
 import '../../models/a2ui_models.dart';
 import '../../models/ws_frame.dart';
-import '../shell/shell_page.dart';
+import '../../core/providers.dart';
 
 final a2uiJsonlPattern = RegExp(r'```a2ui\n([\s\S]*?)```');
 

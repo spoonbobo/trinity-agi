@@ -221,6 +221,82 @@ class AuthClient extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Fetch all users with roles. Requires [users.list] permission.
+  Future<List<Map<String, dynamic>>> fetchUsers() async {
+    final uri = Uri.parse('$authServiceBaseUrl/auth/users');
+    final request = html.HttpRequest();
+    request.open('GET', uri.toString());
+    request.setRequestHeader('Authorization', 'Bearer ${_state.token}');
+
+    final completer = _createRequestCompleter(request);
+    request.send();
+
+    final response = await completer;
+    final body = jsonDecode(response);
+    return List<Map<String, dynamic>>.from(
+      (body['users'] as List?)?.map((e) => Map<String, dynamic>.from(e as Map)) ?? [],
+    );
+  }
+
+  /// Assign a role to a user. Requires [users.manage] permission.
+  Future<void> assignUserRole(String userId, String role) async {
+    final uri = Uri.parse('$authServiceBaseUrl/auth/users/$userId/role');
+    final request = html.HttpRequest();
+    request.open('POST', uri.toString());
+    request.setRequestHeader('Content-Type', 'application/json');
+    request.setRequestHeader('Authorization', 'Bearer ${_state.token}');
+
+    final completer = _createRequestCompleter(request);
+    request.send(jsonEncode({'role': role}));
+
+    await completer;
+  }
+
+  /// Fetch paginated audit log. Requires [audit.read] permission.
+  Future<List<Map<String, dynamic>>> fetchAuditLog({int limit = 50, int offset = 0}) async {
+    final uri = Uri.parse('$authServiceBaseUrl/auth/users/audit?limit=$limit&offset=$offset');
+    final request = html.HttpRequest();
+    request.open('GET', uri.toString());
+    request.setRequestHeader('Authorization', 'Bearer ${_state.token}');
+
+    final completer = _createRequestCompleter(request);
+    request.send();
+
+    final response = await completer;
+    final body = jsonDecode(response);
+    return List<Map<String, dynamic>>.from(
+      (body['logs'] as List?)?.map((e) => Map<String, dynamic>.from(e as Map)) ?? [],
+    );
+  }
+
+  /// Fetch role-permission matrix. Requires [users.list] permission.
+  Future<Map<String, dynamic>> fetchRolePermissionMatrix() async {
+    final uri = Uri.parse('$authServiceBaseUrl/auth/users/roles/permissions');
+    final request = html.HttpRequest();
+    request.open('GET', uri.toString());
+    request.setRequestHeader('Authorization', 'Bearer ${_state.token}');
+
+    final completer = _createRequestCompleter(request);
+    request.send();
+
+    final response = await completer;
+    return Map<String, dynamic>.from(jsonDecode(response) as Map);
+  }
+
+  /// Update permissions for a role. Requires [users.manage] permission.
+  Future<void> updateRolePermissions(String role, List<String> permissions) async {
+    final uri = Uri.parse('$authServiceBaseUrl/auth/users/roles/$role/permissions');
+    final request = html.HttpRequest();
+    request.open('PUT', uri.toString());
+    request.setRequestHeader('Content-Type', 'application/json');
+    request.setRequestHeader('Authorization', 'Bearer ${_state.token}');
+
+    final completer = _createRequestCompleter(request);
+    request.send(jsonEncode({'permissions': permissions}));
+
+    await completer;
+  }
+
   String getKeycloakLoginUrl() {
     return '$authServiceBaseUrl/supabase/auth/authorize?provider=keycloak';
   }

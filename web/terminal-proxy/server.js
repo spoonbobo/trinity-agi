@@ -185,7 +185,7 @@ wss.on('connection', (ws, req) => {
           // Accept gateway token (legacy) or JWT with role
           if (data.token === GATEWAY_TOKEN) {
             authenticated = true;
-            userRole = data.role || 'admin'; // legacy gateway token = admin
+            userRole = data.role || 'superadmin'; // gateway token = superadmin (highest privilege)
             ws.send(JSON.stringify({
               type: 'auth',
               status: 'ok',

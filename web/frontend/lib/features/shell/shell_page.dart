@@ -2,10 +2,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/gateway_client.dart' as gw;
-import '../../core/auth.dart';
-import '../../core/terminal_client.dart';
 import '../../core/theme.dart';
 import '../../core/i18n.dart';
+import '../../core/providers.dart';
 import '../../models/ws_frame.dart';
 import '../../core/auth_client.dart';
 import '../../main.dart' show languageProvider, authClientProvider;
@@ -13,35 +12,10 @@ import '../prompt_bar/prompt_bar.dart';
 import '../chat/chat_stream.dart';
 import '../canvas/a2ui_renderer.dart';
 import '../governance/approval_panel.dart';
-import '../onboarding/onboarding_wizard.dart';
 import '../catalog/skills_cron_dialog.dart';
 import '../memory/memory_dialog.dart';
 import '../settings/settings_dialog.dart';
-
-final _sharedDevice = DeviceIdentity.generate();
-final _sharedAuth = GatewayAuth(
-  token: const String.fromEnvironment(
-    'GATEWAY_TOKEN',
-    defaultValue: 'replace-me-with-a-real-token',
-  ),
-  device: _sharedDevice,
-);
-const _wsUrl = String.fromEnvironment(
-  'GATEWAY_WS_URL',
-  defaultValue: 'ws://localhost:18789',
-);
-const _terminalWsUrl = String.fromEnvironment(
-  'TERMINAL_WS_URL',
-  defaultValue: 'ws://localhost/terminal/',
-);
-
-final gatewayClientProvider = ChangeNotifierProvider<gw.GatewayClient>((ref) {
-  return gw.GatewayClient(url: _wsUrl, auth: _sharedAuth);
-});
-
-final terminalClientProvider = ChangeNotifierProvider<TerminalProxyClient>((ref) {
-  return TerminalProxyClient(url: _terminalWsUrl, auth: _sharedAuth);
-});
+import '../admin/admin_dialog.dart';
 
 class ShellPage extends ConsumerStatefulWidget {
   const ShellPage({super.key});
@@ -76,30 +50,6 @@ class _ShellPageState extends ConsumerState<ShellPage> {
     super.dispose();
   }
 
-  void _showOnboardingDialog({OnboardingStep initialStep = OnboardingStep.welcome}) {
-    final t = ShellTokens.of(context);
-    showDialog(
-      context: context,
-      barrierDismissible: true,
-      builder: (context) => Dialog(
-        backgroundColor: t.surfaceBase,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.zero,
-          side: BorderSide(color: t.border, width: 0.5),
-        ),
-        child: Container(
-          width: MediaQuery.of(context).size.width * 0.82,
-          height: MediaQuery.of(context).size.height * 0.84,
-          constraints: const BoxConstraints(maxWidth: 980, maxHeight: 760),
-          child: OnboardingWizard(
-            initialStep: initialStep,
-            onComplete: () => Navigator.of(context).pop(),
-          ),
-        ),
-      ),
-    );
-  }
-
   void _showSkillsDialog() {
     showDialog(
       context: context,
@@ -129,6 +79,14 @@ class _ShellPageState extends ConsumerState<ShellPage> {
       context: context,
       barrierDismissible: true,
       builder: (context) => const SettingsDialog(),
+    );
+  }
+
+  void _showAdminDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => const AdminDialog(),
     );
   }
 
@@ -197,6 +155,8 @@ class _ShellPageState extends ConsumerState<ShellPage> {
     };
 
     final language = ref.watch(languageProvider);
+    final authState = ref.watch(authClientProvider).state;
+    final isAdmin = authState.hasPermission('users.list');
     final labelStyle = Theme.of(context).textTheme.labelSmall?.copyWith(color: t.fgMuted);
 
     return Container(
@@ -221,11 +181,6 @@ class _ShellPageState extends ConsumerState<ShellPage> {
           ),
           const Spacer(),
           GestureDetector(
-            onTap: () => _showOnboardingDialog(initialStep: OnboardingStep.welcome),
-            child: Text(tr(language, 'setup'), style: labelStyle),
-          ),
-          const SizedBox(width: 14),
-          GestureDetector(
             onTap: _showSkillsDialog,
             child: Text(tr(language, 'skills'), style: labelStyle),
           ),
@@ -234,6 +189,13 @@ class _ShellPageState extends ConsumerState<ShellPage> {
             onTap: _showCronsDialog,
             child: Text(tr(language, 'crons'), style: labelStyle),
           ),
+          if (isAdmin) ...[
+            const SizedBox(width: 14),
+            GestureDetector(
+              onTap: _showAdminDialog,
+              child: Text(tr(language, 'admin'), style: labelStyle),
+            ),
+          ],
           const SizedBox(width: 14),
           GestureDetector(
             onTap: _showSettingsDialog,

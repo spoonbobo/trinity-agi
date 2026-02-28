@@ -1,6 +1,6 @@
 ---
 name: flutter-shell
-description: Develop the Trinity AGI Flutter Web Shell — understand the architecture, A2UI renderer, WebSocket models, dual-client pattern, design tokens, and build workflow.
+description: Develop the Trinity AGI Flutter Web Shell -- understand the architecture, A2UI renderer, WebSocket models, dual-client pattern, design tokens, and build workflow.
 license: MIT
 compatibility: opencode
 metadata:
@@ -10,7 +10,7 @@ metadata:
 
 ## What This Skill Covers
 
-The Flutter Web Shell is the frontend for Trinity AGI. It is an intentionally "empty" command center — no static features, no predefined dashboards. The agent and user build functionality together at runtime via A2UI surfaces and chat.
+The Flutter Web Shell is the frontend for Trinity AGI. It is an intentionally "empty" command center -- no static features, no predefined dashboards. The agent and user build functionality together at runtime via A2UI surfaces and chat.
 
 Source: `web/frontend/`
 
@@ -18,209 +18,149 @@ Source: `web/frontend/`
 
 The shell opens **two** concurrent WebSocket connections to the OpenClaw Gateway:
 
-1. **`GatewayClient`** (`lib/core/gateway_client.dart`) — connects as `operator` role. Handles chat I/O (`chat.send`, `chat.history`, `chat.abort`), exec approvals (`exec.approval.resolve`), and receives streaming `chat` + `agent` events.
+1. **`GatewayClient`** (`lib/core/gateway_client.dart`) -- connects as `operator` role. Handles chat I/O (`chat.send`, `chat.history`, `chat.abort`), exec approvals, and receives streaming `chat` + `agent` events.
 
-2. **`NodeClient`** (`lib/core/node_client.dart`) — connects as `node` role with `canvas` capability. The gateway routes `canvas.a2ui`, `canvas.present`, `canvas.hide`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot` commands here. It parses A2UI JSONL payloads and emits them on a `canvasEvents` stream.
+2. **`NodeClient`** (`lib/core/node_client.dart`) -- connects as `node` role with `canvas` capability. Routes A2UI surface commands and emits them on a `canvasEvents` stream.
 
-Both clients share the same `GatewayAuth` (token + device identity) from `lib/core/auth.dart`.
+Both clients share `GatewayAuth` (token + device identity) from `lib/core/auth.dart`.
 
-State management: **Riverpod**. Providers live in `shell_page.dart`:
-- `gatewayClientProvider` — the operator connection
-- `nodeClientProvider` — the canvas node connection
+## State Management: Riverpod
 
-## Shell Layout (`lib/features/shell/shell_page.dart`)
+All providers are centralized in `core/providers.dart`:
+
+| Provider | Type | Purpose |
+|----------|------|---------|
+| `authClientProvider` | `ChangeNotifierProvider<AuthClient>` | Auth state, login/logout, API methods |
+| `gatewayClientProvider` | `ChangeNotifierProvider<GatewayClient>` | OpenClaw WebSocket (operator role) |
+| `terminalClientProvider` | `ChangeNotifierProvider<TerminalProxyClient>` | Terminal proxy WebSocket |
+
+UI-level providers in `main.dart`:
+
+| Provider | Type |
+|----------|------|
+| `themeModeProvider` | `StateProvider<ThemeMode>` |
+| `fontFamilyProvider` | `StateProvider<AppFontFamily>` |
+| `languageProvider` | `StateProvider<AppLanguage>` |
+
+**IMPORTANT:** `authClientProvider` is defined in `core/providers.dart` and re-exported via `main.dart`. Always import providers from `core/providers.dart` or `main.dart` -- NEVER from `shell_page.dart`.
+
+## Shell Layout
 
 ```
-┌──────────────────────────────────────────┐
-│ Status Bar (connection dot + label)      │
-├──────────────────────┬───────────────────┤
-│                      │  Canvas Panel     │
-│   ChatStreamView     │  (A2UIRenderer)   │
-│                      │       OR          │
-│                      │  Governance Panel │
-│                      │  (ApprovalPanel)  │
-├──────────────────────┴───────────────────┤
-│ PromptBar (text input + toggle buttons)  │
-└──────────────────────────────────────────┘
++--------------------------------------------------+
+| Status Bar: [dot] memory --- setup skills crons [admin] settings |
++-------------------------+------------------------+
+|                         |  Canvas Panel          |
+|   ChatStreamView        |  (A2UIRendererPanel)   |
+|   (flex:6)              |  (flex:4)              |
+|                         |       OR               |
+|                         |  Governance Panel      |
++-------------------------+------------------------+
+| PromptBar (> cursor, text input, voice mic)      |
++--------------------------------------------------+
 ```
 
-- Canvas and Governance panels slide in from the right (flex 4 of 10).
-- Only one side panel at a time.
-- When neither is open, ChatStreamView takes full width.
+The `admin` toggle is permission-gated: visible only when `authState.hasPermission('users.list')`.
 
-## WebSocket Frame Models (`lib/models/ws_frame.dart`)
+## Project Structure
 
-Three frame types matching the OpenClaw protocol:
+```
+web/frontend/lib/
+  main.dart                              -- App entry, re-exports authClientProvider
+  core/
+    providers.dart                       -- ALL Riverpod providers (auth, gateway, terminal)
+    auth.dart                            -- DeviceIdentity, GatewayAuth
+    auth_client.dart                     -- AuthClient, AuthState, AuthRole, API methods
+    gateway_client.dart                  -- GatewayClient (OpenClaw WebSocket)
+    terminal_client.dart                 -- TerminalProxyClient (terminal proxy WebSocket)
+    theme.dart                           -- ShellTokens, buildTheme(), dark/light tokens
+    i18n.dart                            -- Tri-lingual i18n (en/zh-Hans/zh-Hant)
+    rbac_constants.dart                  -- Permission constants, role-tier mappings
+    toast_provider.dart                  -- Toast notifications (showError, showInfo)
+  models/
+    ws_frame.dart                        -- WsRequest, WsResponse, WsEvent, WsFrame
+    a2ui_models.dart                     -- A2UI v0.8 surface/component models
+  features/
+    auth/                                -- LoginPage, AuthGuard
+    shell/                               -- ShellPage (status bar + layout)
+    chat/                                -- ChatStreamView (streaming, markdown, tool cards)
+    canvas/                              -- A2UIRendererPanel, CanvasWebView
+    governance/                          -- ApprovalPanel (exec + Lobster workflows)
+    settings/                            -- SettingsDialog (theme/font/lang/account)
+    catalog/                             -- SkillsCronDialog (skills + crons + ClawHub)
+    memory/                              -- MemoryDialog (MEMORY.md viewer)
+    onboarding/                          -- OnboardingWizard (4-step setup)
+    admin/                               -- AdminDialog (5 tabs: users/audit/health/rbac/sessions)
+    prompt_bar/                          -- PromptBar + VoiceInput
+    terminal/                            -- TerminalView
+```
 
-- `WsRequest` — `{type:"req", id, method, params}`, serialized via `encode()`
-- `WsResponse` — `{type:"res", id, ok, payload|error}`, deserialized via `fromJson()`
-- `WsEvent` — `{type:"event", event, payload, seq?, stateVersion?}`, deserialized via `fromJson()`
-- `WsFrame.parse(raw)` — factory that dispatches to the correct type
+## AuthClient API Methods (`core/auth_client.dart`)
 
-## A2UI Model (`lib/models/a2ui_models.dart`)
+| Method | Endpoint | Permission |
+|--------|----------|------------|
+| `loginWithEmail(email, password)` | GoTrue `/supabase/auth/token` | none |
+| `signUpWithEmail(email, password)` | GoTrue `/supabase/auth/signup` | none |
+| `loginAsGuest()` | `POST /auth/guest` | none |
+| `fetchUsers()` | `GET /auth/users` | users.list |
+| `assignUserRole(userId, role)` | `POST /auth/users/:id/role` | users.manage |
+| `fetchAuditLog({limit, offset})` | `GET /auth/users/audit` | audit.read |
+| `fetchRolePermissionMatrix()` | `GET /auth/users/roles/permissions` | users.list |
+| `updateRolePermissions(role, perms)` | `PUT /auth/users/roles/:role/permissions` | users.manage |
 
-A2UI v0.8 component protocol. Key classes:
+## A2UI Renderer
 
-- `A2UISurface` — identified by `surfaceId`, holds a list of `A2UIComponent` and optional `rootId`
-- `A2UIComponent` — `{id, type, props}`, parsed from `{id, component: {TypeName: {props...}}}`
-- `SurfaceUpdate` — batch of components for a surface
-- `BeginRendering` — marks which component is the root
-- `DataModelUpdate` — live data binding updates
-- `DeleteSurface` — removes a surface
+Supported: `Text`, `Column`, `Row`, `Button`, `Card`, `Image`, `TextField`, `Slider`, `Toggle`, `Progress`, `Divider`, `Spacer`
 
-## A2UI Renderer (`lib/features/canvas/a2ui_renderer.dart`)
+A2UI surfaces arrive via operator events, node `canvasEvents`, or `__A2UI__\n` prefix in tool_result agent events.
 
-Listens on both operator events (event names `canvas`, `a2ui`, `canvas.*`) and node `canvasEvents`. Handles four payload keys:
+## Design Tokens (`core/theme.dart`)
 
-| Payload key | Action |
-|---|---|
-| `surfaceUpdate` | Replace component list for a surface |
-| `beginRendering` | Set the root component ID |
-| `dataModelUpdate` | Refresh bound data |
-| `deleteSurface` | Remove a surface |
+| Token | Dark | Light |
+|-------|------|-------|
+| surfaceBase | #0A0A0A | #F5F5F5 |
+| surfaceCard | #141414 | #EBEBEB |
+| border | #2A2A2A | #D1D1D1 |
+| accentPrimary | #6EE7B7 | #059669 |
+| accentSecondary | #3B82F6 | #2563EB |
+| statusError | #EF4444 | #DC2626 |
+| statusWarning | #FBBF24 | #D97706 |
+| fgPrimary | #E5E5E5 | #1A1A1A |
+| fgMuted | #6B6B6B | #6B6B6B |
 
-Supported A2UI component types for rendering:
-`Text`, `Column`, `Row`, `Button`, `Card`, `Image`, `TextField`, `Slider`, `Toggle`, `Progress`, `Divider`, `Spacer`
+Access: `ShellTokens.of(context)` via ThemeExtension.
 
-Text props can be a plain string, or `{literalString: "..."}` / `{value: "..."}`.
-Children props can be a `List<String>` of IDs or `{explicitList: [...]}`.
-Button `action` props send `/action <action>` as a chat message.
-
-## Chat Stream (`lib/features/chat/chat_stream.dart`)
-
-Displays four entry types: `user`, `assistant`, `tool`, `system`.
-
-Event handling:
-- `chat` events with `state: "delta"` → streaming assistant bubble with blinking cursor
-- `chat` events with `state: "final"` → finalized assistant bubble
-- `agent` events with `stream: "lifecycle"` → thinking indicator (phase start/end)
-- `agent` events with `stream: "tool_call"` → tool card (pending)
-- `agent` events with `stream: "tool_result"` → tool card (completed)
-
-On reconnect, loads history via `chat.history`.
-
-## Governance (`lib/features/governance/approval_panel.dart`)
-
-Two approval types:
-- **Exec approvals** — from `exec.approval.requested` events. Resolved via `exec.approval.resolve`.
-- **Lobster workflow approvals** — from agent `tool_result` with `status: "needs_approval"`. Resolved by sending `/lobster resume <token> --approve|--reject` as chat.
-
-## Design Tokens
-
-| Token | Value |
-|---|---|
-| Background | `#0A0A0A` |
-| Surface / card | `#141414` |
-| Border | `#2A2A2A` |
-| Status bar bg | `#0F0F0F` |
-| Primary (green) | `#6EE7B7` |
-| Secondary (blue) | `#3B82F6` |
-| Error (red) | `#EF4444` |
-| Warning (amber) | `#FBBF24` |
-| Text primary | `#E5E5E5` |
-| Text secondary | `#B0B0B0` |
-| Text muted | `#6B6B6B` |
-| Text ghost | `#3A3A3A` |
-| Font family | `monofur` (custom, loaded from `fonts/`) |
-| User bubble bg | `#1A2A1A`, border `#2A4A2A` |
-| Tool card bg | `#0F1520`, border `#1E3A5F` |
-| Exec approval bg | `#1A1500`, border `#4A3A00` |
-| Workflow approval bg | `#0F1520`, border `#1E3A5F` |
-
-## Dependencies (`pubspec.yaml`)
-
-- `web_socket_channel` — WebSocket connection
-- `speech_to_text` — on-device voice transcription
-- `flutter_riverpod` — state management
-- `uuid` — idempotency keys and device IDs
-- `json_annotation` / `json_serializable` — model serialization (build_runner)
+**Widget conventions:**
+- All borders: 0.5px, `t.border` color, `BorderRadius.zero`
+- Dialogs: zero border-radius + 0.5px border
+- Interactive: `GestureDetector` + `Text` (no Material buttons)
+- Active toggle: `t.accentPrimary`, inactive: `t.fgMuted`
+- Font: Google Fonts monospace (IBM Plex Mono / JetBrains Mono)
 
 ## Build & Deploy
 
-The Flutter app is built inside Docker via the `frontend-builder` profile. The Dockerfile COPYs source from `web/frontend/` into the image and runs `flutter build web`.
-
-### CRITICAL: Docker build cache
-
-**`docker compose run --rm frontend-builder` does NOT rebuild the image** — it only runs the existing image's CMD (copies build output to the volume). If you changed any Dart source files, you MUST rebuild the image first:
+**CRITICAL: `run --rm frontend-builder` does NOT rebuild the image.** You MUST rebuild first:
 
 ```bash
-# Step 1: Rebuild the image (REQUIRED after any source change)
 docker compose -f web/docker-compose.yml --profile build build --no-cache frontend-builder
-
-# Step 2: Run the builder to copy output to the volume
 docker compose -f web/docker-compose.yml --profile build run --rm frontend-builder
-
-# Step 3: Restart nginx to serve the new build
 docker restart trinity-nginx
 ```
 
-Without `--no-cache` (or at minimum `build` before `run`), Docker reuses the cached image layer and your source changes are silently ignored. This is the #1 cause of "my changes aren't working" issues.
+### Compile-time Constants (--dart-define)
 
-### Deploying canvas-bridge extension changes
-
-The canvas-bridge extension (`web/extensions/canvas-bridge/index.ts`) lives in the `openclaw-data` Docker volume. To update it without nuking the volume (which would lose WhatsApp auth, sessions, credentials):
-
-```bash
-# Copy updated file directly into the running container
-docker cp web/extensions/canvas-bridge/index.ts trinity-openclaw:/home/node/.openclaw/extensions/canvas-bridge/index.ts
-
-# Restart gateway to reload the extension
-docker restart trinity-openclaw
-```
-
-### Deploying AGENTS.md changes
-
-The agent bootstrap files live in the workspace inside the `openclaw-data` volume:
-
-```bash
-docker cp web/AGENTS.md trinity-openclaw:/home/node/.openclaw/workspace/AGENTS.md
-docker restart trinity-openclaw
-```
-
-**Note:** Existing sessions cache the system prompt from when they were created. Changes to AGENTS.md only take effect on NEW sessions. To force a fresh session, delete the session file and entry from `sessions.json` inside the container.
-
-### Full deploy checklist (after frontend + extension + AGENTS.md changes)
-
-```bash
-# 1. Rebuild frontend image (--no-cache to bust Docker cache)
-docker compose -f web/docker-compose.yml --profile build build --no-cache frontend-builder
-
-# 2. Copy build output to volume
-docker compose -f web/docker-compose.yml --profile build run --rm frontend-builder
-
-# 3. Copy extension + AGENTS.md into container
-docker cp web/extensions/canvas-bridge/index.ts trinity-openclaw:/home/node/.openclaw/extensions/canvas-bridge/index.ts
-docker cp web/AGENTS.md trinity-openclaw:/home/node/.openclaw/workspace/AGENTS.md
-
-# 4. Restart services
-docker restart trinity-nginx
-docker restart trinity-openclaw
-
-# 5. Wait for healthy
-timeout 30 bash -c 'while ! docker inspect --format={{.State.Health.Status}} trinity-openclaw | grep -q healthy; do sleep 3; done'
-
-# 6. Tell user to hard-refresh browser (Ctrl+Shift+R)
-```
-
-### Verifying the build includes your changes
-
-Search for known strings in the built JS (Dart tree-shakes identifiers, so search for string literals from your code like debugPrint messages):
-
-```bash
-docker run --rm -v web_flutter-build:/build alpine grep -c 'YOUR_UNIQUE_STRING' /build/main.dart.js
-```
-
-### Gateway token
-
-The gateway token must be passed at build time:
-```
---dart-define=GATEWAY_TOKEN=...
-```
-This is handled automatically via `OPENCLAW_GATEWAY_TOKEN` in `web/.env` → docker-compose build arg → Dockerfile `--dart-define`.
+| Constant | Default |
+|----------|---------|
+| GATEWAY_TOKEN | replace-me-with-a-real-token |
+| GATEWAY_WS_URL | ws://localhost:18789 |
+| TERMINAL_WS_URL | ws://localhost/terminal/ |
+| AUTH_SERVICE_URL | http://localhost |
+| SUPABASE_ANON_KEY | (empty) |
 
 ## Do Not
 
-- Do not add static features, navigation bars, sidebars, or menus
-- Do not import heavy UI frameworks — the shell stays minimal
-- Do not hardcode the gateway URL — use `String.fromEnvironment('GATEWAY_WS_URL')`
-- Do not bypass governance — all exec approvals require explicit user consent
+- Do not import providers from `shell_page.dart` -- use `core/providers.dart`
+- Do not add static features, sidebars, or menus
+- Do not use Material buttons -- use GestureDetector + Text
+- Do not hardcode URLs -- use `String.fromEnvironment()`
+- Do not bypass governance

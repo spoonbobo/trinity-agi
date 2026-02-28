@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
 
-const REGISTRY_PATH = path.join(__dirname, '..', 'rbac', 'permissions.yaml');
+const REGISTRY_PATH = path.join(__dirname, 'rbac', 'permissions.yaml');
 
 let registry = null;
 
@@ -42,8 +42,35 @@ function getRoleTier(roleName) {
 
 function isCommandAllowedForTier(cleanCmd, tier) {
   const allowed = getTerminalCommands(tier);
-  const baseCmd = cleanCmd.split(' ')[0];
-  return allowed.some(a => cleanCmd.startsWith(a) || baseCmd === a.split(' ')[0]);
+  const allCommands = getAllCommandsAboveTier(tier);
+
+  // Find the most specific (longest) matching entry across all tiers
+  let bestMatch = null;
+  let bestLen = -1;
+  for (const a of [...allowed, ...allCommands]) {
+    if (cleanCmd === a || cleanCmd.startsWith(a + ' ')) {
+      if (a.length > bestLen) {
+        bestMatch = a;
+        bestLen = a.length;
+      }
+    }
+  }
+
+  if (!bestMatch) return false;
+
+  // The most specific match must be in the allowed set for this tier
+  return allowed.includes(bestMatch);
+}
+
+function getAllCommandsAboveTier(tier) {
+  const reg = loadRegistry();
+  const allTiers = ['safe', 'standard', 'privileged'];
+  const tierIndex = allTiers.indexOf(tier);
+  const above = [];
+  for (let i = tierIndex + 1; i < allTiers.length; i++) {
+    above.push(...(reg?.terminal?.[allTiers[i]] || []));
+  }
+  return above;
 }
 
 function getAllowedCommands() {

@@ -125,6 +125,36 @@ String tr(AppLanguage language, String key) {
       'zh-Hans': '相似度',
       'zh-Hant': '相似度',
     },
+    'admin': {
+      'en': 'admin',
+      'zh-Hans': '管理',
+      'zh-Hant': '管理',
+    },
+    'users': {
+      'en': 'users',
+      'zh-Hans': '用户',
+      'zh-Hant': '用戶',
+    },
+    'audit': {
+      'en': 'audit',
+      'zh-Hans': '审计',
+      'zh-Hant': '稽核',
+    },
+    'health': {
+      'en': 'health',
+      'zh-Hans': '健康',
+      'zh-Hant': '健康',
+    },
+    'rbac': {
+      'en': 'rbac',
+      'zh-Hans': '权限',
+      'zh-Hant': '權限',
+    },
+    'sessions': {
+      'en': 'sessions',
+      'zh-Hans': '会话',
+      'zh-Hant': '會話',
+    },
   };
 
   final langKey = switch (language) {

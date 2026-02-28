@@ -25,6 +25,7 @@ class TerminalOutput {
 class TerminalProxyClient extends ChangeNotifier {
   final String url;
   final GatewayAuth auth;
+  String _role;
 
   WebSocketChannel? _channel;
   TerminalConnectionState _state = TerminalConnectionState.disconnected;
@@ -41,7 +42,13 @@ class TerminalProxyClient extends ChangeNotifier {
   TerminalProxyClient({
     required this.url,
     required this.auth,
-  });
+    String role = 'admin',
+  }) : _role = role;
+
+  /// Update the role used for terminal proxy authentication.
+  void updateRole(String role) {
+    _role = role;
+  }
 
   Future<void> connect() async {
     if (_state == TerminalConnectionState.connected ||
@@ -73,6 +80,7 @@ class TerminalProxyClient extends ChangeNotifier {
     _channel?.sink.add(jsonEncode({
       'type': 'auth',
       'token': auth.token,
+      'role': _role,
     }));
   }
 

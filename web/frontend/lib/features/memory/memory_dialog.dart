@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme.dart';
 import '../../core/toast_provider.dart';
-import '../shell/shell_page.dart' show terminalClientProvider;
+import '../../core/providers.dart' show terminalClientProvider;
 
 class MemoryDialog extends ConsumerStatefulWidget {
   const MemoryDialog({super.key});

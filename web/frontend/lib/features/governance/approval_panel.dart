@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/ws_frame.dart';
-import '../shell/shell_page.dart';
+import '../../core/providers.dart';
 
 /// Represents a pending exec approval request from the OpenClaw gateway.
 class ApprovalRequest {

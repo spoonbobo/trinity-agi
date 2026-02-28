@@ -5,7 +5,7 @@ import '../../core/theme.dart';
 import '../../core/i18n.dart';
 import '../../core/toast_provider.dart';
 import '../../main.dart' show languageProvider;
-import '../shell/shell_page.dart' show terminalClientProvider;
+import '../../core/providers.dart' show terminalClientProvider;
 
 enum CatalogTab { skills, crons }
 

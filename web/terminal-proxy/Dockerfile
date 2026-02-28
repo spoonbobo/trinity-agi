@@ -8,8 +8,8 @@ COPY package.json ./
 RUN npm install --production
 
 COPY server.js ./
+COPY rbac-registry.js ./
 COPY rbac/ ./rbac/
-COPY rbac/rbac-registry.js ./
 
 EXPOSE 18790
 

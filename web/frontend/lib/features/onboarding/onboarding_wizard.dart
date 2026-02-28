@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme.dart';
 import '../../core/terminal_client.dart';
 import '../terminal/terminal_view.dart';
-import '../shell/shell_page.dart' show terminalClientProvider;
+import '../../core/providers.dart' show terminalClientProvider;
 
 enum OnboardingStep { welcome, status, configure, terminal }
 

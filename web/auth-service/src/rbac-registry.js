@@ -29,6 +29,15 @@ function getPermissionActions() {
 }
 
 function getPermissionsByTier(tier) {
+  // Support both tier names (safe/standard/privileged) and role names (guest/user/admin)
+  const tierToRoles = { safe: ['guest'], standard: ['guest', 'user'], privileged: ['guest', 'user', 'admin'] };
+  const matchRoles = tierToRoles[tier];
+  if (matchRoles) {
+    return getAllPermissions()
+      .filter(p => matchRoles.includes(p.tier))
+      .map(p => p.action);
+  }
+  // Fallback: match directly against tier field value
   return getAllPermissions()
     .filter(p => p.tier === tier)
     .map(p => p.action);
@@ -55,9 +64,37 @@ function getTerminalCommands(tier) {
 }
 
 function isCommandAllowedForTier(command, tier) {
+  const cleanCmd = command.replace(/^openclaw\s+/, '').trim();
   const allowed = getTerminalCommands(tier);
-  const baseCmd = command.split(' ')[0];
-  return allowed.some(a => command.startsWith(a) || baseCmd === a.split(' ')[0]);
+  const allAbove = getAllCommandsAboveTier(tier);
+
+  // Find the most specific (longest) matching entry across all tiers
+  let bestMatch = null;
+  let bestLen = -1;
+  for (const a of [...allowed, ...allAbove]) {
+    if (cleanCmd === a || cleanCmd.startsWith(a + ' ')) {
+      if (a.length > bestLen) {
+        bestMatch = a;
+        bestLen = a.length;
+      }
+    }
+  }
+
+  if (!bestMatch) return false;
+
+  // The most specific match must be in the allowed set for this tier
+  return allowed.includes(bestMatch);
+}
+
+function getAllCommandsAboveTier(tier) {
+  const reg = loadRegistry();
+  const allTiers = ['safe', 'standard', 'privileged'];
+  const tierIndex = allTiers.indexOf(tier);
+  const above = [];
+  for (let i = tierIndex + 1; i < allTiers.length; i++) {
+    above.push(...(reg?.terminal?.[allTiers[i]] || []));
+  }
+  return above;
 }
 
 function getRoleTier(roleName) {

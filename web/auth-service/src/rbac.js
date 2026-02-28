@@ -120,6 +120,78 @@ async function ensureRole(userId, roleName, grantedBy = null) {
   }
 }
 
+/**
+ * Get the full role-permission matrix from the database.
+ * Returns: { roles: [{name, permissions: [action]}], allPermissions: [action] }
+ */
+async function getRolePermissionMatrix() {
+  const rolesResult = await pool.query(
+    'SELECT id, name FROM rbac.roles ORDER BY CASE name WHEN \'superadmin\' THEN 0 WHEN \'admin\' THEN 1 WHEN \'user\' THEN 2 WHEN \'guest\' THEN 3 ELSE 4 END'
+  );
+  const permsResult = await pool.query(
+    'SELECT id, action, description FROM rbac.permissions ORDER BY action'
+  );
+  const mappingResult = await pool.query(
+    'SELECT r.name AS role_name, p.action FROM rbac.role_permissions rp JOIN rbac.roles r ON r.id = rp.role_id JOIN rbac.permissions p ON p.id = rp.permission_id'
+  );
+
+  const mappingByRole = {};
+  for (const row of mappingResult.rows) {
+    if (!mappingByRole[row.role_name]) mappingByRole[row.role_name] = [];
+    mappingByRole[row.role_name].push(row.action);
+  }
+
+  return {
+    roles: rolesResult.rows.map(r => ({
+      name: r.name,
+      permissions: mappingByRole[r.name] || [],
+    })),
+    allPermissions: permsResult.rows.map(p => ({ action: p.action, description: p.description })),
+  };
+}
+
+/**
+ * Set the direct permissions for a role. Replaces all existing role_permissions for that role.
+ * Does NOT affect inherited permissions (those come from the recursive CTE).
+ * @param {string} roleName
+ * @param {string[]} permissionActions - list of permission action strings to assign
+ */
+async function setRolePermissions(roleName, permissionActions) {
+  const roleId = await findRoleIdByName(roleName);
+  if (!roleId) throw new Error(`Role not found: ${roleName}`);
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Delete all existing direct permissions for this role
+    await client.query('DELETE FROM rbac.role_permissions WHERE role_id = $1', [roleId]);
+
+    // Insert new permissions
+    if (permissionActions.length > 0) {
+      const permResult = await client.query(
+        'SELECT id, action FROM rbac.permissions WHERE action = ANY($1)',
+        [permissionActions]
+      );
+
+      for (const perm of permResult.rows) {
+        await client.query(
+          'INSERT INTO rbac.role_permissions (role_id, permission_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+          [roleId, perm.id]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+    log('info', 'RBAC: role permissions updated', { role: roleName, count: permissionActions.length, action: 'permissions.updated' });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = {
   getEffectivePermissions,
   hasPermission,
@@ -130,4 +202,6 @@ module.exports = {
   listUsers,
   writeAuditLog,
   getAuditLog,
+  getRolePermissionMatrix,
+  setRolePermissions,
 };

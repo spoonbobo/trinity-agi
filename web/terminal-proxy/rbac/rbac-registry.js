@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
 
-const REGISTRY_PATH = path.join(__dirname, '..', 'rbac', 'permissions.yaml');
+const REGISTRY_PATH = path.join(__dirname, 'permissions.yaml');
 
 let registry = null;
 

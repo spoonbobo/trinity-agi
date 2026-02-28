@@ -7,7 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme.dart';
 import '../../core/gateway_client.dart' as gw;
 import '../../models/ws_frame.dart';
-import '../shell/shell_page.dart';
+import '../../core/providers.dart';
 
 /// A single entry in the chat stream.
 class ChatEntry {
