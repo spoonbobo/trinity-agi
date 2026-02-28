@@ -46,6 +46,7 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
   final _scrollController = ScrollController();
   StreamSubscription<WsEvent>? _chatSub;
   bool _agentThinking = false;
+  bool _showScrollToBottom = false;
 
   @override
   void initState() {
@@ -55,7 +56,15 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
     });
   }
 
+  void _onScrollPositionChanged() {
+    final shouldShow = !_isNearBottom && _entries.isNotEmpty;
+    if (shouldShow != _showScrollToBottom) {
+      setState(() => _showScrollToBottom = shouldShow);
+    }
+  }
+
   void _subscribeToChatEvents() {
+    _scrollController.addListener(_onScrollPositionChanged);
     final client = ref.read(gatewayClientProvider);
 
     // Listen for user messages sent through the prompt bar
@@ -414,16 +423,45 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
       );
     }
 
-    return ListView.builder(
-      controller: _scrollController,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      itemCount: _entries.length + (_agentThinking ? 1 : 0),
-      itemBuilder: (context, index) {
-        if (index == _entries.length && _agentThinking) {
-          return _buildThinkingIndicator(theme);
-        }
-        return _buildEntry(_entries[index], theme);
-      },
+    // (F) Stack with floating scroll-to-bottom button
+    return Stack(
+      children: [
+        ListView.builder(
+          controller: _scrollController,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          itemCount: _entries.length + (_agentThinking ? 1 : 0),
+          itemBuilder: (context, index) {
+            if (index == _entries.length && _agentThinking) {
+              return _buildThinkingIndicator(theme);
+            }
+            return _buildEntry(_entries[index], theme);
+          },
+        ),
+        if (_showScrollToBottom)
+          Positioned(
+            right: 12,
+            bottom: 8,
+            child: GestureDetector(
+              onTap: () {
+                _scrollToBottom();
+                setState(() => _showScrollToBottom = false);
+              },
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: t.surfaceCard,
+                    border: Border.all(color: t.border, width: 0.5),
+                  ),
+                  child: Icon(Icons.keyboard_arrow_down,
+                    size: 16, color: t.fgMuted),
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 

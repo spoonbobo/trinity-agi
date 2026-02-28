@@ -30,6 +30,10 @@ class _PromptBarState extends ConsumerState<PromptBar> {
     _voiceController.addListener(() {
       if (mounted) setState(() {});
     });
+    // (D) Auto-focus prompt bar on page load
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _focusNode.requestFocus();
+    });
   }
 
   @override
@@ -159,6 +163,13 @@ class _PromptBarState extends ConsumerState<PromptBar> {
                     ),
                   ),
                 ),
+                // (C) Keyboard shortcut hint
+                if (!_sending && _controller.text.isEmpty && widget.enabled)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 4, bottom: 3),
+                    child: Text('shift+enter for new line',
+                      style: TextStyle(fontSize: 9, color: t.fgDisabled)),
+                  ),
                 // #8: Abort button (shown when sending)
                 if (_sending)
                   GestureDetector(

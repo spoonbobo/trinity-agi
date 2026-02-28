@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/gateway_client.dart' as gw;
@@ -18,6 +19,11 @@ import '../memory/memory_dialog.dart';
 import '../settings/settings_dialog.dart';
 import '../admin/admin_dialog.dart';
 
+const _canvasSplitKey = 'trinity_canvas_split';
+const _defaultCanvasFlex = 4.0;
+const _canvasMinFlex = 1.0;
+const _canvasMaxFlex = 8.0;
+
 class ShellPage extends ConsumerStatefulWidget {
   const ShellPage({super.key});
 
@@ -28,14 +34,20 @@ class ShellPage extends ConsumerStatefulWidget {
 class _ShellPageState extends ConsumerState<ShellPage> {
   bool _showGovernance = false;
   StreamSubscription<WsEvent>? _approvalSub;
-  // #4: Canvas panel flex ratio (draggable)
-  double _canvasFlex = 4.0;
-  static const _canvasMinFlex = 0.5;
-  static const _canvasMaxFlex = 8.0;
+  double _canvasFlex = _defaultCanvasFlex;
+  bool _dividerHovered = false;
 
   @override
   void initState() {
     super.initState();
+    // (A) Restore persisted split ratio from localStorage
+    final stored = html.window.localStorage[_canvasSplitKey];
+    if (stored != null) {
+      final parsed = double.tryParse(stored);
+      if (parsed != null) {
+        _canvasFlex = parsed.clamp(_canvasMinFlex, _canvasMaxFlex);
+      }
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final client = ref.read(gatewayClientProvider);
       client.connect().catchError((e) {
@@ -56,11 +68,8 @@ class _ShellPageState extends ConsumerState<ShellPage> {
   }
 
   void _showSkillsDialog() {
-    showDialog(
-      context: context,
-      barrierDismissible: true,
-      builder: (context) => const SkillsDialog(),
-    );
+    showDialog(context: context, barrierDismissible: true,
+      builder: (context) => const SkillsDialog());
   }
 
   void _showMemoryDialog() {
@@ -69,11 +78,8 @@ class _ShellPageState extends ConsumerState<ShellPage> {
   }
 
   void _showAutomationsDialog() {
-    showDialog(
-      context: context,
-      barrierDismissible: true,
-      builder: (context) => const AutomationsDialog(),
-    );
+    showDialog(context: context, barrierDismissible: true,
+      builder: (context) => const AutomationsDialog());
   }
 
   void _showSettingsDialog() {
@@ -86,11 +92,20 @@ class _ShellPageState extends ConsumerState<ShellPage> {
       builder: (context) => const AdminDialog());
   }
 
+  // (A) Persist split ratio to localStorage
+  void _persistSplit() {
+    html.window.localStorage[_canvasSplitKey] = _canvasFlex.toStringAsFixed(2);
+  }
+
   @override
   Widget build(BuildContext context) {
     final client = ref.watch(gatewayClientProvider);
     final isConnected = client.state == gw.ConnectionState.connected;
     final t = ShellTokens.of(context);
+
+    // FIX: Both panels use dynamic flex derived from _canvasFlex
+    final chatFlex = ((10 - _canvasFlex) * 100).round();
+    final canvasFlex = (_canvasFlex * 100).round();
 
     return Scaffold(
       body: Column(
@@ -100,12 +115,14 @@ class _ShellPageState extends ConsumerState<ShellPage> {
             child: Row(
               children: [
                 Expanded(
-                  flex: 6,
+                  flex: chatFlex,
                   child: const ChatStreamView(),
                 ),
-                // #4: Draggable divider between chat and canvas
+                // Draggable divider: hover highlight (E) + double-click reset (B)
                 MouseRegion(
                   cursor: SystemMouseCursors.resizeColumn,
+                  onEnter: (_) => setState(() => _dividerHovered = true),
+                  onExit: (_) => setState(() => _dividerHovered = false),
                   child: GestureDetector(
                     onHorizontalDragUpdate: (details) {
                       final renderBox = context.findRenderObject() as RenderBox;
@@ -116,22 +133,35 @@ class _ShellPageState extends ConsumerState<ShellPage> {
                             .clamp(_canvasMinFlex, _canvasMaxFlex);
                       });
                     },
+                    onHorizontalDragEnd: (_) => _persistSplit(),
+                    // (B) Double-click resets to default 60/40
+                    onDoubleTap: () {
+                      setState(() => _canvasFlex = _defaultCanvasFlex);
+                      _persistSplit();
+                    },
                     child: Container(
-                      width: 4,
+                      width: 6,
                       color: Colors.transparent,
                       child: Center(
-                        child: Container(width: 1, color: t.border),
+                        // (E) Hover highlight: 2px mint on hover, 1px border normally
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 150),
+                          width: _dividerHovered ? 2 : 1,
+                          color: _dividerHovered
+                              ? t.accentPrimary.withOpacity(0.5)
+                              : t.border,
+                        ),
                       ),
                     ),
                   ),
                 ),
                 Expanded(
-                  flex: (_canvasFlex * 100).round(),
+                  flex: canvasFlex,
                   child: const A2UIRendererPanel(),
                 ),
                 if (_showGovernance)
                   Expanded(
-                    flex: 400,
+                    flex: canvasFlex,
                     child: Container(
                       decoration: BoxDecoration(
                         border: Border(
@@ -158,7 +188,6 @@ class _ShellPageState extends ConsumerState<ShellPage> {
   }
 
   Widget _buildStatusBar(gw.ConnectionState state, ShellTokens t) {
-    // #20: Tooltip label for connection dot
     final dotColor = switch (state) {
       gw.ConnectionState.connected => t.accentPrimary,
       gw.ConnectionState.connecting => t.statusWarning,
@@ -185,17 +214,14 @@ class _ShellPageState extends ConsumerState<ShellPage> {
       ),
       child: Row(
         children: [
-          // #20: Tooltip on connection dot
           Tooltip(
             message: dotLabel,
             child: Container(
-              width: 6,
-              height: 6,
+              width: 6, height: 6,
               decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
             ),
           ),
           const SizedBox(width: 10),
-          // #19: Hover cursor on all status bar items
           _HoverLabel(text: tr(language, 'memory'), style: labelStyle!, onTap: _showMemoryDialog),
           const Spacer(),
           _HoverLabel(text: tr(language, 'skills'), style: labelStyle, onTap: _showSkillsDialog),
@@ -213,7 +239,6 @@ class _ShellPageState extends ConsumerState<ShellPage> {
   }
 }
 
-/// #19: Status bar label with hover cursor and subtle opacity feedback.
 class _HoverLabel extends StatefulWidget {
   final String text;
   final TextStyle style;
