@@ -70,10 +70,30 @@ String tr(AppLanguage language, String key) {
       'zh-Hans': '技能',
       'zh-Hant': '技能',
     },
+    'automations': {
+      'en': 'automations',
+      'zh-Hans': '自动化',
+      'zh-Hant': '自動化',
+    },
     'crons': {
       'en': 'crons',
       'zh-Hans': '定时任务',
       'zh-Hant': '定時任務',
+    },
+    'hooks': {
+      'en': 'hooks',
+      'zh-Hans': '钩子',
+      'zh-Hant': '鉤子',
+    },
+    'webhooks': {
+      'en': 'webhooks',
+      'zh-Hans': '网络钩子',
+      'zh-Hant': '網路鉤子',
+    },
+    'polls': {
+      'en': 'polls',
+      'zh-Hans': '投票',
+      'zh-Hant': '投票',
     },
     'settings': {
       'en': 'settings',

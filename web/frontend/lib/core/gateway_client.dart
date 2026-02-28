@@ -57,6 +57,8 @@ class GatewayClient extends ChangeNotifier {
   }
 
   bool _disposed = false;
+  int _reconnectAttempts = 0;
+  Timer? _reconnectTimer;
 
   /// Only forward events the shell knows how to handle.
   static const _handledEvents = {
@@ -92,6 +94,8 @@ class GatewayClient extends ChangeNotifier {
           if (response.ok &&
               response.payload?['type'] == 'hello-ok') {
             _state = ConnectionState.connected;
+            _reconnectAttempts = 0; // Reset on successful connect
+            _reconnectTimer?.cancel();
             notifyListeners();
           }
           break;
@@ -209,9 +213,34 @@ class GatewayClient extends ChangeNotifier {
     _state = ConnectionState.disconnected;
     _failPendingCompleters('Connection closed');
     notifyListeners();
+    // #3: Auto-reconnect with exponential backoff
+    _scheduleReconnect();
+  }
+
+  void _scheduleReconnect() {
+    if (_disposed) return;
+    _reconnectAttempts++;
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s max
+    final delay = Duration(
+        seconds: (_reconnectAttempts <= 5)
+            ? (1 << (_reconnectAttempts - 1))
+            : 30);
+    debugPrint('[GW] reconnecting in ${delay.inSeconds}s (attempt $_reconnectAttempts)');
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(delay, () {
+      if (!_disposed &&
+          _state != ConnectionState.connected &&
+          _state != ConnectionState.connecting) {
+        connect().catchError((e) {
+          debugPrint('[GW] reconnect failed: $e');
+        });
+      }
+    });
   }
 
   void disconnect() {
+    _reconnectTimer?.cancel();
+    _reconnectAttempts = 0;
     _channel?.sink.close();
     _state = ConnectionState.disconnected;
     _failPendingCompleters('Client disconnected');

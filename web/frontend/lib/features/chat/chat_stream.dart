@@ -84,9 +84,14 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
             _entries.clear();
             for (final msg in messages) {
               if (msg is! Map<String, dynamic>) continue;
+              var content = msg['content'] as String? ?? '';
+              // #10: Replace raw A2UI JSONL in history with friendly message
+              if (content.startsWith('__A2UI__')) {
+                content = 'Canvas updated';
+              }
               _entries.add(ChatEntry(
                 role: msg['role'] as String? ?? 'system',
-                content: msg['content'] as String? ?? '',
+                content: content,
               ));
             }
           });
@@ -128,7 +133,8 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
     } catch (e, st) {
       debugPrint('[Chat] error handling event: $e\n$st');
     }
-    _scrollToBottom();
+    // #11: Only auto-scroll if user is near the bottom
+    _smartScrollToBottom();
   }
 
   void _handleChatEventInner(WsEvent event) {
@@ -236,7 +242,7 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
             setState(() {
               if (_entries.isNotEmpty && _entries.last.role == 'tool') {
                 _entries[_entries.length - 1] = _entries.last.copyWith(
-                  content: 'Surface rendered in Canvas',
+                  content: 'Canvas updated',
                   isStreaming: false,
                 );
               }
@@ -272,7 +278,7 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
           setState(() {
             if (_entries.isNotEmpty && _entries.last.role == 'tool') {
               _entries[_entries.length - 1] = _entries.last.copyWith(
-                content: 'Surface rendered in Canvas',
+                content: 'Canvas updated',
                 isStreaming: false,
               );
             }
@@ -289,26 +295,6 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
         }
       }
     }
-  }
-
-  void _appendAssistantContent(String content, {bool streaming = false}) {
-    setState(() {
-      _agentThinking = false;
-      if (_entries.isNotEmpty &&
-          _entries.last.role == 'assistant' &&
-          _entries.last.isStreaming) {
-        _entries[_entries.length - 1] = _entries.last.copyWith(
-          content: _entries.last.content + content,
-          isStreaming: streaming,
-        );
-      } else {
-        _entries.add(ChatEntry(
-          role: 'assistant',
-          content: content,
-          isStreaming: streaming,
-        ));
-      }
-    });
   }
 
   String? _lastCanvasSurface;
@@ -342,14 +328,14 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
             setState(() {
               if (_entries.isEmpty || _entries.last.role != 'tool' || !_entries.last.isStreaming) {
                 _entries.add(ChatEntry(
-                  role: 'tool',
-                  content: 'Surface rendered in Canvas',
-                  toolName: 'canvas_ui',
+                   role: 'tool',
+                   content: 'Canvas updated',
+                   toolName: 'canvas_ui',
                   isStreaming: false,
                 ));
               } else {
                 _entries[_entries.length - 1] = _entries.last.copyWith(
-                  content: 'Surface rendered in Canvas',
+                   content: 'Canvas updated',
                   isStreaming: false,
                 );
               }
@@ -374,6 +360,18 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
         client.emitCanvasEvent(WsEvent(event: 'a2ui', payload: parsed));
       } catch (_) {}
     }
+  }
+
+  // #11: Smart scroll -- only auto-scroll if user is near the bottom
+  bool get _isNearBottom {
+    if (!_scrollController.hasClients) return true;
+    final pos = _scrollController.position;
+    return pos.maxScrollExtent - pos.pixels < 100;
+  }
+
+  void _smartScrollToBottom() {
+    if (!_isNearBottom) return;
+    _scrollToBottom();
   }
 
   void _scrollToBottom() {
@@ -401,12 +399,17 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
     final theme = Theme.of(context);
     final t = ShellTokens.of(context);
 
+    // #14 (chat): Better empty state with hint
     if (_entries.isEmpty && !_agentThinking) {
       return Center(
-        child: Icon(
-          Icons.terminal_rounded,
-          size: 14,
-          color: t.fgPlaceholder,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.terminal_rounded, size: 20, color: t.fgPlaceholder),
+            const SizedBox(height: 6),
+            Text('type a message to begin',
+              style: TextStyle(fontSize: 10, color: t.fgPlaceholder, letterSpacing: 1)),
+          ],
         ),
       );
     }
@@ -652,36 +655,67 @@ class _CursorBlinkState extends State<_CursorBlink>
   }
 }
 
-class _ToolCard extends StatelessWidget {
+// #12: Expandable tool output
+class _ToolCard extends StatefulWidget {
   final ChatEntry entry;
   const _ToolCard({required this.entry});
+
+  @override
+  State<_ToolCard> createState() => _ToolCardState();
+}
+
+class _ToolCardState extends State<_ToolCard> {
+  bool _expanded = false;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final t = ShellTokens.of(context);
-    final prefix = entry.isStreaming ? '~ ' : '  ';
-    final nameColor = entry.isStreaming ? t.fgTertiary : t.fgMuted;
+    final prefix = widget.entry.isStreaming ? '~ ' : '  ';
+    final nameColor = widget.entry.isStreaming ? t.fgTertiary : t.fgMuted;
+    final content = widget.entry.content;
+    final isTruncated = content.length > 300;
+    final displayContent = _expanded || !isTruncated
+        ? content
+        : '${content.substring(0, 300)}...';
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            '$prefix${entry.toolName ?? 'tool'}',
+            '$prefix${widget.entry.toolName ?? 'tool'}',
             style: theme.textTheme.labelSmall?.copyWith(color: nameColor),
           ),
-          if (entry.content.isNotEmpty)
+          if (content.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(left: 16),
-              child: SelectableText(
-                entry.content.length > 300
-                    ? '${entry.content.substring(0, 300)}...'
-                    : entry.content,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  fontSize: 12,
-                  color: t.fgTertiary,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SelectableText(
+                    displayContent,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontSize: 12,
+                      color: t.fgTertiary,
+                    ),
+                  ),
+                  if (isTruncated)
+                    GestureDetector(
+                      onTap: () => setState(() => _expanded = !_expanded),
+                      child: MouseRegion(
+                        cursor: SystemMouseCursors.click,
+                        child: Text(
+                          _expanded ? 'show less' : 'show more',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: t.accentPrimary,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
         ],

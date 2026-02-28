@@ -14,28 +14,28 @@ final authClientProvider = ChangeNotifierProvider<AuthClient>((ref) {
 });
 
 final _sharedDevice = DeviceIdentity.generate();
-final sharedAuth = GatewayAuth(
+final _sharedAuth = GatewayAuth(
   token: const String.fromEnvironment(
     'GATEWAY_TOKEN',
     defaultValue: 'replace-me-with-a-real-token',
   ),
   device: _sharedDevice,
 );
-const gatewayWsUrl = String.fromEnvironment(
+const _gatewayWsUrl = String.fromEnvironment(
   'GATEWAY_WS_URL',
   defaultValue: 'ws://localhost:18789',
 );
-const terminalWsUrl = String.fromEnvironment(
+const _terminalWsUrl = String.fromEnvironment(
   'TERMINAL_WS_URL',
   defaultValue: 'ws://localhost/terminal/',
 );
 
 final gatewayClientProvider = ChangeNotifierProvider<gw.GatewayClient>((ref) {
-  return gw.GatewayClient(url: gatewayWsUrl, auth: sharedAuth);
+  return gw.GatewayClient(url: _gatewayWsUrl, auth: _sharedAuth);
 });
 
 final terminalClientProvider = ChangeNotifierProvider<TerminalProxyClient>((ref) {
   final authState = ref.watch(authClientProvider).state;
   final role = roleToString(authState.role);
-  return TerminalProxyClient(url: terminalWsUrl, auth: sharedAuth, role: role);
+  return TerminalProxyClient(url: _terminalWsUrl, auth: _sharedAuth, role: role);
 });

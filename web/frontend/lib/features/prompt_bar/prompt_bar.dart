@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme.dart';
 import '../../core/providers.dart';
@@ -55,6 +56,12 @@ class _PromptBarState extends ConsumerState<PromptBar> {
     _focusNode.requestFocus();
   }
 
+  // #8: Abort the current agent run
+  void _abort() {
+    final client = ref.read(gatewayClientProvider);
+    client.abortChat();
+  }
+
   void _toggleVoice() {
     if (_voiceController.isListening) {
       _voiceController.stopListening();
@@ -66,6 +73,29 @@ class _PromptBarState extends ConsumerState<PromptBar> {
         },
       );
     }
+  }
+
+  // #2: Handle Shift+Enter for multi-line, Enter for send
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event.logicalKey != LogicalKeyboardKey.enter) return KeyEventResult.ignored;
+
+    final isShiftHeld = HardwareKeyboard.instance.isShiftPressed;
+    if (isShiftHeld) {
+      // Insert newline at cursor
+      final text = _controller.text;
+      final selection = _controller.selection;
+      final newText = text.replaceRange(selection.start, selection.end, '\n');
+      _controller.value = TextEditingValue(
+        text: newText,
+        selection: TextSelection.collapsed(offset: selection.start + 1),
+      );
+      return KeyEventResult.handled;
+    }
+
+    // Enter without Shift = send
+    _send();
+    return KeyEventResult.handled;
   }
 
   @override
@@ -101,30 +131,51 @@ class _PromptBarState extends ConsumerState<PromptBar> {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(
-                  '> ',
+                  _sending ? '~ ' : '> ',
                   style: theme.textTheme.bodyLarge?.copyWith(
-                    color: widget.enabled ? t.accentPrimary : t.fgDisabled,
+                    color: widget.enabled
+                        ? (_sending ? t.fgTertiary : t.accentPrimary)
+                        : t.fgDisabled,
                   ),
                 ),
                 Expanded(
-                  child: TextField(
-                    controller: _controller,
-                    focusNode: _focusNode,
-                    enabled: widget.enabled && !_sending,
-                    maxLines: 5,
-                    minLines: 1,
-                    textInputAction: TextInputAction.send,
-                    style: theme.textTheme.bodyLarge,
-                    decoration: InputDecoration(
-                      hintText: widget.enabled ? '' : 'connecting...',
-                      contentPadding: EdgeInsets.zero,
-                      isDense: true,
-                      border: InputBorder.none,
+                  // #2: Wrap in Focus to intercept Enter/Shift+Enter
+                  child: Focus(
+                    onKeyEvent: _handleKeyEvent,
+                    child: TextField(
+                      controller: _controller,
+                      focusNode: _focusNode,
+                      enabled: widget.enabled && !_sending,
+                      maxLines: 5,
+                      minLines: 1,
+                      // Remove textInputAction and onSubmitted to let Focus handle it
+                      style: theme.textTheme.bodyLarge,
+                      decoration: InputDecoration(
+                        hintText: widget.enabled ? '' : 'connecting...',
+                        contentPadding: EdgeInsets.zero,
+                        isDense: true,
+                        border: InputBorder.none,
+                      ),
                     ),
-                    onSubmitted: (_) => _send(),
                   ),
                 ),
-                if (_voiceController.isAvailable)
+                // #8: Abort button (shown when sending)
+                if (_sending)
+                  GestureDetector(
+                    onTap: _abort,
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.click,
+                      child: Padding(
+                        padding: const EdgeInsets.only(left: 8, bottom: 2),
+                        child: Icon(
+                          Icons.stop_rounded,
+                          size: 16,
+                          color: t.statusError,
+                        ),
+                      ),
+                    ),
+                  ),
+                if (_voiceController.isAvailable && !_sending)
                   GestureDetector(
                     onTap: _toggleVoice,
                     child: Padding(

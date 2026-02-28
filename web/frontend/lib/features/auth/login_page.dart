@@ -19,7 +19,6 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   final _passwordController = TextEditingController();
   bool _isLogin = true; // true=login, false=signup
   bool _loading = false;
-  String? _error;
 
   @override
   void dispose() {
@@ -33,10 +32,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     final password = _passwordController.text;
     if (email.isEmpty || password.isEmpty) return;
 
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    setState(() => _loading = true);
 
     try {
       final authClient = ref.read(authClientProvider);
@@ -49,9 +45,6 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     } catch (e) {
       final errMsg = e.toString().replaceAll('Exception: ', '');
       ToastService.showError(context, errMsg);
-      setState(() {
-        _error = errMsg;
-      });
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -60,7 +53,6 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   Future<void> _loginAsGuest() async {
     setState(() {
       _loading = true;
-      _error = null;
     });
 
     try {
@@ -70,9 +62,6 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     } catch (e) {
       final errMsg = e.toString().replaceAll('Exception: ', '');
       ToastService.showError(context, errMsg);
-      setState(() {
-        _error = errMsg;
-      });
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -166,15 +155,15 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     : () {
                         final authClient = ref.read(authClientProvider);
                         final url = authClient.getKeycloakLoginUrl();
-                        // Open Keycloak OIDC flow in same window
-                        // GoTrue handles the redirect back
-                        // For now, open in new tab for simplicity
-                        // html.window.location.assign(url);
+                        debugPrint('SSO URL: $url (not yet implemented)');
                       },
-                child: Text(
-                  'sign in with SSO',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: t.fgMuted,
+                child: Tooltip(
+                  message: 'SSO integration coming soon',
+                  child: Text(
+                    'sign in with SSO',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: t.fgDisabled,
+                    ),
                   ),
                 ),
               ),

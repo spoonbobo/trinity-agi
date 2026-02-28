@@ -72,12 +72,4 @@ Example JSONL:
     },
   });
 
-  api.registerGatewayMethod(
-    "canvas-bridge.surface",
-    ({ respond }: { respond: (ok: boolean, payload: any) => void }) => {
-      respond(true, {
-        surface: latestSurface,
-      });
-    }
-  );
 }
