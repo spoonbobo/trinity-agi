@@ -4,6 +4,7 @@ const cors = require('cors');
 const Docker = require('dockerode');
 const { spawn } = require('child_process');
 const path = require('path');
+const { getRoleTier, isCommandAllowedForTier, getAllowedCommands, getInteractiveCommands } = require('./rbac-registry');
 
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
@@ -12,88 +13,26 @@ const GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN;
 const JWT_SECRET = process.env.JWT_SECRET;
 const OPENCLAW_CONTAINER = process.env.OPENCLAW_CONTAINER_NAME || 'trinity-openclaw';
 
-// Command tiers by role
-const COMMAND_TIERS = {
-  safe: [
-    'status', 'health', 'models',
-    'skills list', 'skills list --json',
-    'crons list', 'crons list --json', 'cron list', 'cron list --json',
-    'cat /home/node/.openclaw/workspace/MEMORY.md',
-  ],
-  standard: [
-    'doctor', 'skills', 'cron',
-    'clawhub', 'sessions list', 'logs', 'channels', 'tools', 'memory',
-    'config get', 'config validate',
-  ],
-  privileged: [
-    'doctor --fix', 'configure', 'onboard', 'dashboard',
-    'config set',
-  ],
-};
-
-function roleToTier(role) {
-  switch (role) {
-    case 'superadmin':
-    case 'admin':
-      return 'privileged';
-    case 'user':
-      return 'standard';
-    default:
-      return 'safe';
+function log(level, message, meta = {}) {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    level,
+    service: 'terminal-proxy',
+    ...meta,
+  };
+  if (level === 'error') {
+    console.error(JSON.stringify(entry));
+  } else {
+    console.log(JSON.stringify(entry));
   }
-}
-
-function isCommandAllowedForTier(cleanCmd, tier) {
-  const allTiers = ['safe', 'standard', 'privileged'];
-  const tierIndex = allTiers.indexOf(tier);
-  // Collect all allowed commands up to this tier
-  const allowed = [];
-  for (let i = 0; i <= tierIndex; i++) {
-    allowed.push(...(COMMAND_TIERS[allTiers[i]] || []));
-  }
-  const baseCmd = cleanCmd.split(' ')[0];
-  return allowed.some(a => cleanCmd.startsWith(a) || baseCmd === a.split(' ')[0]);
 }
 
 const docker = new Docker();
 
-// Allowed OpenClaw commands (whitelist)
-const ALLOWED_COMMANDS = [
-  'status',
-  'health',
-  'doctor',
-  'doctor --fix',
-  'models',
-  'clawhub',
-  'skills',
-  'skills list',
-  'skills list --json',
-  'cron',
-  'cron list',
-  'cron list --json',
-  'configure',
-  'onboard',
-  'dashboard',
-  'sessions list',
-  'logs',
-  'channels',
-  'tools',
-  'memory',
-  'cat /home/node/.openclaw/workspace/MEMORY.md',
-  'config get',
-  'config set',
-  'config validate',
-];
-
-// Commands that require interactive mode (TTY)
-const INTERACTIVE_COMMANDS = [
-  'configure',
-  'onboard',
-  'channels login',
-];
+// Allowed OpenClaw commands (whitelist) - now loaded from registry
+// Interactive commands - now loaded from registry
 
 function validateCommand(cmd) {
-  // Remove 'openclaw ' prefix if present
   const cleanCmd = cmd.replace(/^openclaw\s+/, '').trim();
 
   if (cleanCmd === 'cat /home/node/.openclaw/workspace/MEMORY.md') {
@@ -106,15 +45,15 @@ function validateCommand(cmd) {
   }
 
   const baseCmd = cleanCmd.split(' ')[0];
+  const allowedCommands = getAllowedCommands();
   
-  // Check if command starts with allowed base command
-  const isAllowed = ALLOWED_COMMANDS.some(allowed => {
+  const isAllowed = allowedCommands.some(allowed => {
     return cleanCmd.startsWith(allowed) || baseCmd === allowed.split(' ')[0];
   });
   
   return {
     isAllowed,
-    isInteractive: INTERACTIVE_COMMANDS.some(ic => cleanCmd.startsWith(ic)),
+    isInteractive: getInteractiveCommands().some(ic => cleanCmd.startsWith(ic)),
     cleanCmd,
     baseCmd
   };
@@ -218,8 +157,8 @@ app.get('/health', (req, res) => {
 // Get allowed commands list
 app.get('/commands', (req, res) => {
   res.json({
-    allowed: ALLOWED_COMMANDS,
-    interactive: INTERACTIVE_COMMANDS
+    allowed: getAllowedCommands(),
+    interactive: getInteractiveCommands()
   });
 });
 
@@ -287,14 +226,20 @@ wss.on('connection', (ws, req) => {
               type: 'error',
               message: 'Not authenticated'
             }));
+            log('warn', 'command rejected: not authenticated', { action: 'command.rejected' });
             return;
           }
           
           if (data.command) {
-            // Check command tier authorization
-            const tier = roleToTier(userRole);
+            const tier = getRoleTier(userRole);
             const validation = validateCommand(data.command);
             if (!isCommandAllowedForTier(validation.cleanCmd, tier)) {
+              log('warn', 'command denied: insufficient tier', { 
+                command: validation.cleanCmd, 
+                userRole, 
+                tier,
+                action: 'command.denied'
+              });
               ws.send(JSON.stringify({
                 type: 'error',
                 message: `Permission denied: "${validation.cleanCmd}" requires higher access (your role: ${userRole})`
@@ -306,6 +251,12 @@ wss.on('connection', (ws, req) => {
               }));
               break;
             }
+            log('info', 'command executed', { 
+              command: validation.cleanCmd, 
+              userRole, 
+              tier,
+              action: 'command.executed'
+            });
             currentProcess = executeCommand(ws, data.command, GATEWAY_TOKEN);
           }
           break;

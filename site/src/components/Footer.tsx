@@ -15,7 +15,7 @@ export default function Footer() {
             </p>
             <div className="mt-6 flex items-center gap-3">
               <a
-                href="https://github.com/trinity-agi"
+                href="https://github.com/spoonbobo/trinity-agi/"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex h-8 w-8 items-center justify-center rounded-lg border border-[#2a2a2a] bg-[#141414] transition hover:border-[#3a3a3a]"
@@ -43,8 +43,8 @@ export default function Footer() {
                 </a>
               </li>
               <li>
-                <a href="#pricing" className="font-sans text-sm text-[#6b6b6b] transition hover:text-[#e5e5e5]">
-                  Pricing
+                <a href="/docs" className="font-sans text-sm text-[#6b6b6b] transition hover:text-[#e5e5e5]">
+                  Documentation
                 </a>
               </li>
               <li>

@@ -20,6 +20,94 @@ services:
     networks:
       - trinity
 
+  # ─── HashiCorp Vault ────────────────────────────────────────────────────────
+  vault:
+    image: hashicorp/vault:1.15
+    container_name: trinity-vault
+    restart: unless-stopped
+    ports:
+      - "8200:8200"
+    environment:
+      VAULT_ADDR: http://0.0.0.0:8200
+      VAULT_DEV_ROOT_TOKEN_ID: root
+      VAULT_UI: "false"
+    cap_add:
+      - IPC_LOCK
+    networks:
+      - trinity
+
+  # ─── Vault Init ───────────────────────────────────────────────────────────
+  vault-init:
+    image: hashicorp/vault:1.15
+    container_name: trinity-vault-init
+    restart: "no"
+    depends_on:
+      vault:
+        condition: service_started
+    volumes:
+      - vault-data:/vault/data
+      - ./vault/scripts:/vault/scripts:ro
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: root
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-9e2254f6b1dccfe9db011eedba5a7c67e7fccc0d2d4b12b08f7f0cb8525a0f32}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzcyMjcwMDU0LCJleHAiOjE5Mjk5NTAwNTR9.U1xu4Was-iunrn8oXeA-2n8hMpCgcDVhiGXxndiB3TU}
+      SUPABASE_POSTGRES_PASSWORD: ${SUPABASE_POSTGRES_PASSWORD:-86f8df7b8a5bd91b093baa52f985cdd7}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-a34013d0f1e1edfc7407c769}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-trinity-shell-secret}
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-08580dde290a68d7920acdaf5b6a1417b914b082ce031e94}
+      SUPERADMIN_ALLOWLIST: ${SUPERADMIN_ALLOWLIST:-}
+      ENABLE_DEFAULT_SUPERADMIN: ${ENABLE_DEFAULT_SUPERADMIN:-true}
+    entrypoint: ["/bin/sh", "/vault/scripts/init.sh"]
+    networks:
+      - trinity
+
+  # ─── Grafana Loki ────────────────────────────────────────────────────────
+  loki:
+    image: grafana/loki:latest
+    container_name: trinity-loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/local-config.yaml -validation.allow-structured-metadata=false
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki/config.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    networks:
+      - trinity
+
+  # ─── Grafana ───────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: trinity-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin123}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - loki
+    networks:
+      - trinity
+
+  # ─── Fluentd ───────────────────────────────────────────────────────────────
+  fluentd:
+    image: fluent/fluentd:v1.16-1
+    container_name: trinity-fluentd
+    restart: unless-stopped
+    ports:
+      - "24224:24224"
+      - "24224:24224/udp"
+    volumes:
+      - ./fluentd/fluent.conf:/fluentd/etc/fluent.conf:ro
+    networks:
+      - trinity
+
   # ─── Supabase GoTrue (Auth) ───────────────────────────────────────────
   supabase-auth:
     image: supabase/gotrue:v2.170.0
@@ -225,6 +313,9 @@ volumes:
   openclaw-data:
   flutter-build:
   supabase-db-data:
+  vault-data:
+  grafana-data:
+  loki-data:
 
 networks:
   trinity:

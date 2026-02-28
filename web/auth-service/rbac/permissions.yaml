@@ -1,0 +1,139 @@
+# Trinity AGI Permission Registry
+# Single source of truth for all permissions
+# Used by: auth-service, terminal-proxy, Flutter frontend
+
+permissions:
+  # Chat
+  - action: chat.read
+    description: View chat messages
+    tier: guest
+  - action: chat.send
+    description: Send chat messages
+    tier: user
+
+  # Canvas/A2UI
+  - action: canvas.view
+    description: View canvas/A2UI surfaces
+    tier: guest
+
+  # Memory
+  - action: memory.read
+    description: Read workspace memory
+    tier: guest
+  - action: memory.write
+    description: Write workspace memory
+    tier: user
+
+  # Skills
+  - action: skills.list
+    description: List available skills
+    tier: guest
+  - action: skills.install
+    description: Install skills from ClawHub
+    tier: user
+  - action: skills.manage
+    description: Manage/remove skills
+    tier: admin
+
+  # Crons
+  - action: crons.list
+    description: List cron jobs
+    tier: guest
+  - action: crons.manage
+    description: Create/edit/delete cron jobs
+    tier: user
+
+  # Terminal
+  - action: terminal.exec.safe
+    description: Execute safe read-only terminal commands
+    tier: guest
+  - action: terminal.exec.standard
+    description: Execute standard terminal commands
+    tier: user
+  - action: terminal.exec.privileged
+    description: Execute privileged terminal commands
+    tier: admin
+
+  # Settings
+  - action: settings.read
+    description: View settings
+    tier: guest
+  - action: settings.admin
+    description: Modify system settings
+    tier: admin
+
+  # Governance
+  - action: governance.view
+    description: View approval requests
+    tier: guest
+  - action: governance.resolve
+    description: Approve/reject governance requests
+    tier: user
+
+  # ACP Agents
+  - action: acp.spawn
+    description: Spawn ACP agent sessions
+    tier: user
+  - action: acp.manage
+    description: Manage ACP sessions (cancel/close/steer)
+    tier: admin
+
+  # Users
+  - action: users.list
+    description: List users and roles
+    tier: admin
+  - action: users.manage
+    description: Assign/revoke user roles
+    tier: admin
+
+  # Audit
+  - action: audit.read
+    description: View audit log
+    tier: admin
+
+# Role definitions with tier mapping
+roles:
+  guest:
+    tier: safe
+    inherits: []
+  user:
+    tier: standard
+    inherits: [guest]
+  admin:
+    tier: privileged
+    inherits: [user]
+  superadmin:
+    tier: privileged
+    inherits: [admin]
+
+# Terminal command tiers
+terminal:
+  safe:
+    - status
+    - health
+    - models
+    - skills list
+    - skills list --json
+    - crons list
+    - crons list --json
+    - cron list
+    - cron list --json
+    - cat /home/node/.openclaw/workspace/MEMORY.md
+  standard:
+    - doctor
+    - skills
+    - cron
+    - clawhub
+    - sessions list
+    - logs
+    - channels
+    - tools
+    - memory
+    - config get
+    - config validate
+  privileged:
+    - doctor --fix
+    - configure
+    - onboard
+    - dashboard
+    - config set

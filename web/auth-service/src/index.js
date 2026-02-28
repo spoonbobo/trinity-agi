@@ -32,46 +32,74 @@ async function ensureDefaultSuperadmin() {
   const password = process.env.DEFAULT_SUPERADMIN_PASSWORD || 'admin';
   const gotrueUrl = process.env.SUPABASE_AUTH_URL || 'http://supabase-auth:9999';
   const anonKey = process.env.SUPABASE_ANON_KEY || '';
+  
+  const allowlist = (process.env.SUPERADMIN_ALLOWLIST || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  if (allowlist.length === 0) {
+    console.warn('[auth-service] SUPERADMIN_ALLOWLIST is empty - no users will receive superadmin role');
+    return;
+  }
 
   try {
-    // Attempt signup first (idempotent if email already exists)
-    const signupResp = await fetch(`${gotrueUrl}/signup`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(anonKey ? { apikey: anonKey } : {}),
-      },
-      body: JSON.stringify({ email, password }),
-    });
-
     let userId = null;
-    const signupText = await signupResp.text();
-    if (signupText) {
-      try {
-        const signupJson = JSON.parse(signupText);
-        userId = signupJson?.user?.id || null;
-      } catch (_) {}
-    }
 
-    // If signup didn't return user (already exists), login to resolve id
-    if (!userId) {
-      const tokenResp = await fetch(`${gotrueUrl}/token?grant_type=password`, {
+    for (const emailOrId of [email, ...allowlist]) {
+      if (!emailOrId.includes('@')) {
+        userId = emailOrId;
+        break;
+      }
+      
+      const signupResp = await fetch(`${gotrueUrl}/signup`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...(anonKey ? { apikey: anonKey } : {}),
         },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: emailOrId, password }),
       });
-      if (tokenResp.ok) {
-        const tokenJson = await tokenResp.json();
-        userId = tokenJson?.user?.id || null;
+
+      const signupText = await signupResp.text();
+      if (signupText) {
+        try {
+          const signupJson = JSON.parse(signupText);
+          const foundId = signupJson?.user?.id || null;
+          if (foundId && allowlist.includes(foundId)) {
+            userId = foundId;
+            break;
+          }
+        } catch (_) {}
+      }
+
+      if (!userId) {
+        const tokenResp = await fetch(`${gotrueUrl}/token?grant_type=password`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(anonKey ? { apikey: anonKey } : {}),
+          },
+          body: JSON.stringify({ email: emailOrId, password }),
+        });
+        if (tokenResp.ok) {
+          const tokenJson = await tokenResp.json();
+          const foundId = tokenJson?.user?.id || null;
+          if (foundId && allowlist.includes(foundId)) {
+            userId = foundId;
+            break;
+          }
+        }
       }
     }
 
     if (!userId) {
-      const signupStatus = signupResp.status;
-      console.warn(`[auth-service] Could not resolve default superadmin user id (signup status: ${signupStatus})`);
+      console.warn(`[auth-service] No user from SUPERADMIN_ALLOWLIST found`);
+      return;
+    }
+
+    if (!allowlist.includes(userId)) {
+      console.warn(`[auth-service] User ${userId} is not in SUPERADMIN_ALLOWLIST - refusing to grant superadmin`);
       return;
     }
 
@@ -80,7 +108,7 @@ async function ensureDefaultSuperadmin() {
     await ensureRole(userId, 'user', null);
     await ensureRole(userId, 'guest', null);
 
-    console.log(`[auth-service] Default superadmin ensured: ${email} (${userId})`);
+    console.log(`[auth-service] Superadmin ensured: ${userId} (from allowlist)`);
   } catch (err) {
     console.warn('[auth-service] Default superadmin bootstrap failed:', err.message);
   }

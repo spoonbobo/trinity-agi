@@ -55,6 +55,45 @@ docker exec -it trinity-openclaw openclaw channels login # login
 
 The gateway token is stored in `web/.env` as `OPENCLAW_GATEWAY_TOKEN`.
 
+## Models CLI Reference
+
+The `models` command has several subcommands. Use these exact forms — **there are no shorthand aliases** (e.g. `models default` does not exist; use `models set`).
+
+```
+openclaw models                          # show configured model status (alias for `models status`)
+openclaw models status                   # same — show default, fallbacks, aliases, auth overview
+openclaw models status --json            # JSON output
+openclaw models status --probe           # live-probe configured provider auth
+openclaw models list                     # list configured models only
+openclaw models list --all               # list full model catalog (all providers)
+openclaw models list --provider <name>   # filter by provider (e.g. opencode, venice, openrouter)
+openclaw models list --local             # filter to local models only
+openclaw models list --json              # JSON output
+openclaw models set <model>              # set the default model (by id or alias)
+openclaw models set-image <model>        # set the image model
+openclaw models fallbacks list           # list fallback models
+openclaw models fallbacks add <model>    # add a fallback model
+openclaw models fallbacks remove <model> # remove a fallback model
+openclaw models fallbacks clear          # clear all fallback models
+openclaw models aliases list             # list model aliases
+openclaw models aliases add              # add or update a model alias
+openclaw models aliases remove           # remove a model alias
+openclaw models auth add                 # interactive auth helper
+openclaw models auth login               # run provider plugin auth flow
+openclaw models auth paste-token         # paste a token into auth-profiles.json
+openclaw models auth setup-token         # run provider CLI to create/sync token (TTY)
+openclaw models auth login-github-copilot # GitHub Copilot device flow (TTY)
+openclaw models scan                     # scan OpenRouter free models for tools + images
+openclaw models scan --set-default       # scan and set first selection as default
+openclaw models scan --set-image         # scan and set first image selection
+```
+
+**Common mistakes to avoid:**
+- `models default <model>` — does not exist. Use `models set <model>`.
+- `models set-default <model>` — does not exist. Use `models set <model>`.
+- `models --list` — does not exist. Use `models list`.
+- `models list --all` is required to see models beyond the currently configured ones.
+
 ## Configuration
 
 Config lives at `web/openclaw.json` (mounted read-only into the container at `~/.openclaw/openclaw.json`).

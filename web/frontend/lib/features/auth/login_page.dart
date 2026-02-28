@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme.dart';
 import '../../core/auth_client.dart';
+import '../../core/toast_provider.dart';
 import '../../main.dart' show authClientProvider;
 
 class LoginPage extends ConsumerStatefulWidget {
@@ -46,8 +47,10 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       }
       widget.onLoginSuccess?.call();
     } catch (e) {
+      final errMsg = e.toString().replaceAll('Exception: ', '');
+      ToastService.showError(context, errMsg);
       setState(() {
-        _error = e.toString().replaceAll('Exception: ', '');
+        _error = errMsg;
       });
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -65,8 +68,10 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       await authClient.loginAsGuest();
       widget.onLoginSuccess?.call();
     } catch (e) {
+      final errMsg = e.toString().replaceAll('Exception: ', '');
+      ToastService.showError(context, errMsg);
       setState(() {
-        _error = e.toString().replaceAll('Exception: ', '');
+        _error = errMsg;
       });
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -127,14 +132,6 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 onSubmitted: (_) => _submitEmail(),
               ),
               const SizedBox(height: 16),
-              if (_error != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Text(
-                    _error!,
-                    style: theme.textTheme.bodyMedium?.copyWith(color: t.statusError),
-                  ),
-                ),
               // Actions
               Row(
                 children: [

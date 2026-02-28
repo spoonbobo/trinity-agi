@@ -17,11 +17,12 @@ export default function Navbar() {
           <a href="#how" className="font-mono text-xs tracking-wide text-[#6b6b6b] transition hover:text-[#e5e5e5]">
             HOW IT WORKS
           </a>
-          <a href="#pricing" className="font-mono text-xs tracking-wide text-[#6b6b6b] transition hover:text-[#e5e5e5]">
-            PRICING
+
+          <a href="/docs" className="font-mono text-xs tracking-wide text-[#6b6b6b] transition hover:text-[#e5e5e5]">
+            DOCS
           </a>
           <a
-            href="https://github.com/trinity-agi"
+            href="https://github.com/spoonbobo/trinity-agi/"
             target="_blank"
             rel="noopener noreferrer"
             className="font-mono text-xs tracking-wide text-[#6b6b6b] transition hover:text-[#e5e5e5]"
@@ -29,10 +30,10 @@ export default function Navbar() {
             GITHUB
           </a>
           <a
-            href="#pricing"
+            href="/docs"
             className="rounded-lg border border-[#6ee7b7] bg-[#6ee7b7]/10 px-4 py-1.5 font-mono text-xs tracking-wide text-[#6ee7b7] transition hover:bg-[#6ee7b7]/20"
           >
-            JOIN
+            GET STARTED
           </a>
         </div>
 
@@ -59,9 +60,9 @@ export default function Navbar() {
         <div className="border-t border-[#2a2a2a] bg-[#0a0a0a] px-6 py-4 md:hidden">
           <div className="flex flex-col gap-4">
             <a href="#how" onClick={() => setMobileOpen(false)} className="font-mono text-xs tracking-wide text-[#6b6b6b]">HOW IT WORKS</a>
-            <a href="#pricing" onClick={() => setMobileOpen(false)} className="font-mono text-xs tracking-wide text-[#6b6b6b]">PRICING</a>
-            <a href="https://github.com/trinity-agi" target="_blank" rel="noopener noreferrer" className="font-mono text-xs tracking-wide text-[#6b6b6b]">GITHUB</a>
-            <a href="#pricing" onClick={() => setMobileOpen(false)} className="rounded-lg border border-[#6ee7b7] bg-[#6ee7b7]/10 px-4 py-2 text-center font-mono text-xs tracking-wide text-[#6ee7b7]">JOIN</a>
+            <a href="/docs" onClick={() => setMobileOpen(false)} className="font-mono text-xs tracking-wide text-[#6b6b6b]">DOCS</a>
+            <a href="https://github.com/spoonbobo/trinity-agi/" target="_blank" rel="noopener noreferrer" className="font-mono text-xs tracking-wide text-[#6b6b6b]">GITHUB</a>
+            <a href="/docs" onClick={() => setMobileOpen(false)} className="rounded-lg border border-[#6ee7b7] bg-[#6ee7b7]/10 px-4 py-2 text-center font-mono text-xs tracking-wide text-[#6ee7b7]">GET STARTED</a>
           </div>
         </div>
       )}

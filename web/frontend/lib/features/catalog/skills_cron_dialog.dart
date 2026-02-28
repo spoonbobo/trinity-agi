@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme.dart';
 import '../../core/i18n.dart';
+import '../../core/toast_provider.dart';
 import '../../main.dart' show languageProvider;
 import '../shell/shell_page.dart' show terminalClientProvider;
 
@@ -136,8 +137,10 @@ class _SkillsCronDialogState extends ConsumerState<SkillsCronDialog> {
       });
     } catch (e) {
       if (!mounted) return;
+      final errMsg = 'failed to load skills/cron: $e';
+      ToastService.showError(context, errMsg);
       setState(() {
-        _error = 'failed to load skills/cron: $e';
+        _error = errMsg;
       });
     } finally {
       if (!mounted) return;
@@ -153,6 +156,7 @@ class _SkillsCronDialogState extends ConsumerState<SkillsCronDialog> {
     if (rawName.isEmpty) return;
 
     if (!client.isAuthenticated) {
+      ToastService.showError(context, 'terminal proxy not connected');
       setState(() {
         _error = 'terminal proxy not connected';
       });
@@ -172,8 +176,10 @@ class _SkillsCronDialogState extends ConsumerState<SkillsCronDialog> {
       await _loadData();
     } catch (e) {
       if (!mounted) return;
+      final errMsg = 'failed to install $rawName: $e';
+      ToastService.showError(context, errMsg);
       setState(() {
-        _error = 'failed to install $rawName: $e';
+        _error = errMsg;
       });
     } finally {
       if (!mounted) return;
@@ -189,8 +195,9 @@ class _SkillsCronDialogState extends ConsumerState<SkillsCronDialog> {
     if (query.isEmpty) return;
 
     if (!client.isAuthenticated) {
+      ToastService.showError(context, 'terminal proxy not connected');
       setState(() {
-        _clawhubError = 'terminal proxy not connected';
+        _error = 'terminal proxy not connected';
       });
       return;
     }
@@ -571,14 +578,6 @@ class _SkillsCronDialogState extends ConsumerState<SkillsCronDialog> {
                     Text(
                       'loading...',
                       style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary),
-                    ),
-                  if (_error != null)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 12),
-                      child: Text(
-                        _error!,
-                        style: theme.textTheme.labelSmall?.copyWith(color: t.statusError),
-                      ),
                     ),
                   const Spacer(),
                   GestureDetector(

@@ -5,7 +5,6 @@ import Navbar from "@/components/Navbar";
 import Hero from "@/components/Hero";
 import HowItWorks from "@/components/HowItWorks";
 import WhyItMatters from "@/components/WhyItMatters";
-import Pricing from "@/components/Pricing";
 import Footer from "@/components/Footer";
 import LangSwitch from "@/components/LangSwitch";
 
@@ -17,7 +16,6 @@ export default function Home() {
         <Hero />
         <HowItWorks />
         <WhyItMatters />
-        <Pricing />
       </main>
       <Footer />
       <LangSwitch />

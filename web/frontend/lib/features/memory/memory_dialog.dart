@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme.dart';
+import '../../core/toast_provider.dart';
 import '../shell/shell_page.dart' show terminalClientProvider;
 
 class MemoryDialog extends ConsumerStatefulWidget {
@@ -51,8 +52,10 @@ class _MemoryDialogState extends ConsumerState<MemoryDialog> {
       });
     } catch (e) {
       if (!mounted) return;
+      final errMsg = '$e';
+      ToastService.showError(context, errMsg);
       setState(() {
-        _error = '$e';
+        _error = errMsg;
       });
     } finally {
       if (!mounted) return;
