@@ -136,7 +136,9 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
     final theme = Theme.of(context);
 
     if (_surfaces.isEmpty) {
-      return const SizedBox.shrink();
+      return Container(
+        color: const Color(0xFF0A0A0A),
+      );
     }
 
     return ListView(
