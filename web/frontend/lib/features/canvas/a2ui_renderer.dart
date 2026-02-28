@@ -138,6 +138,26 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
     if (_surfaces.isEmpty) {
       return Container(
         color: const Color(0xFF0A0A0A),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.grid_view_rounded,
+                size: 36,
+                color: theme.colorScheme.primary.withOpacity(0.2),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'CANVAS',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  letterSpacing: 2,
+                  color: const Color(0xFF3A3A3A),
+                ),
+              ),
+            ],
+          ),
+        ),
       );
     }
 
