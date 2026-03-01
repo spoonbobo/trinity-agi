@@ -220,7 +220,7 @@ class _PromptTemplateManagerDialogState
     return Dialog(
       backgroundColor: t.surfaceBase,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.zero,
+        borderRadius: kShellBorderRadius,
         side: BorderSide(color: t.border, width: 0.5),
       ),
       child: Container(
@@ -415,6 +415,7 @@ class _PromptTemplateManagerDialogState
           Container(
             constraints: const BoxConstraints(maxHeight: 160),
             decoration: BoxDecoration(
+              borderRadius: kShellBorderRadiusSm,
               border: Border.all(color: t.border, width: 0.5),
             ),
             child: TextField(
@@ -531,6 +532,7 @@ class _ManagerTemplateRowState extends State<_ManagerTemplateRow> {
                   padding: const EdgeInsets.symmetric(
                       horizontal: 5, vertical: 1),
                   decoration: BoxDecoration(
+                    borderRadius: kShellBorderRadiusSm,
                     border: Border.all(color: t.border, width: 0.5),
                   ),
                   child: Text(

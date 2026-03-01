@@ -159,6 +159,7 @@ class _ApprovalPanelState extends ConsumerState<ApprovalPanel> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
+                    borderRadius: kShellBorderRadiusSm,
                     color: t.statusWarning.withOpacity(0.15),
                   ),
                   child: Text(
@@ -251,6 +252,7 @@ class _ExecApprovalCard extends StatelessWidget {
       margin: const EdgeInsets.symmetric(vertical: 4),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
+        borderRadius: kShellBorderRadius,
         color: t.surfaceCard,
         border: Border.all(color: t.statusWarning.withOpacity(0.3)),
       ),
@@ -296,7 +298,7 @@ class _ExecApprovalCard extends StatelessWidget {
                   backgroundColor: t.accentPrimary,
                   foregroundColor: t.surfaceBase,
                   padding: const EdgeInsets.symmetric(horizontal: 16),
-                  shape: const RoundedRectangleBorder(),
+                  shape: RoundedRectangleBorder(borderRadius: kShellBorderRadiusSm),
                 ),
                 child: Text('APPROVE', style: theme.textTheme.labelSmall),
               ),
@@ -327,6 +329,7 @@ class _LobsterApprovalCard extends StatelessWidget {
       margin: const EdgeInsets.symmetric(vertical: 4),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
+        borderRadius: kShellBorderRadius,
         color: t.surfaceCard,
         border: Border.all(color: t.accentSecondary.withOpacity(0.3)),
       ),
@@ -378,7 +381,7 @@ class _LobsterApprovalCard extends StatelessWidget {
                   backgroundColor: t.accentSecondary,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(horizontal: 16),
-                  shape: const RoundedRectangleBorder(),
+                  shape: RoundedRectangleBorder(borderRadius: kShellBorderRadiusSm),
                 ),
                 child: Text('APPROVE', style: theme.textTheme.labelSmall),
               ),
@@ -404,6 +407,7 @@ class _ResolvedCard extends StatelessWidget {
       margin: const EdgeInsets.symmetric(vertical: 2),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
+        borderRadius: kShellBorderRadiusSm,
         color: t.surfaceCard,
         border: Border.all(color: t.border),
       ),

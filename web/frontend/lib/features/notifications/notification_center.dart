@@ -145,6 +145,7 @@ class NotificationCenter extends ConsumerWidget {
       width: 320,
       constraints: const BoxConstraints(maxHeight: 400),
       decoration: BoxDecoration(
+        borderRadius: kShellBorderRadius,
         color: t.surfaceBase,
         border: Border.all(color: t.border, width: 0.5),
         boxShadow: [
@@ -155,6 +156,7 @@ class NotificationCenter extends ConsumerWidget {
           ),
         ],
       ),
+      clipBehavior: Clip.antiAlias,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [

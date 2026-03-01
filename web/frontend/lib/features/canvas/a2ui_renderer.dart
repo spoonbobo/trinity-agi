@@ -12,6 +12,7 @@ import '../../core/theme.dart';
 import '../../models/a2ui_models.dart';
 import '../../models/ws_frame.dart';
 import '../../core/providers.dart';
+import 'a2ui_editor.dart';
 
 /// Material icon name -> IconData lookup for the Icon component.
 final Map<String, IconData> _materialIconMap = {
@@ -143,6 +144,14 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
   final GlobalKey _repaintBoundaryKey = GlobalKey();
   bool _showExportMenu = false;
 
+  // Edit mode state
+  bool _editMode = false;
+  String? _selectedComponentId;
+  String? _selectedSurfaceId;
+  final UndoRedoManager _undoRedo = UndoRedoManager();
+  final FocusNode _canvasFocusNode = FocusNode();
+  Timer? _syncDebounce;
+
   @override
   void initState() {
     super.initState();
@@ -190,14 +199,15 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
       if (raw is Map<String, dynamic>) {
         try {
           final begin = BeginRendering.fromJson(raw);
-          final surface = _surfaces[begin.surfaceId];
-          if (surface != null) {
-            surface.rootId = begin.root;
-            if (begin.catalogId != null) {
-              surface.catalogId = begin.catalogId;
-            }
-            needsRebuild = true;
+          final surface = _surfaces.putIfAbsent(
+            begin.surfaceId,
+            () => A2UISurface(surfaceId: begin.surfaceId),
+          );
+          surface.rootId = begin.root;
+          if (begin.catalogId != null) {
+            surface.catalogId = begin.catalogId;
           }
+          needsRebuild = true;
         } catch (e) {
           debugPrint('[A2UI] bad beginRendering: $e');
         }
@@ -372,7 +382,207 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
   @override
   void dispose() {
     _chatSub?.cancel();
+    _canvasFocusNode.dispose();
+    _syncDebounce?.cancel();
     super.dispose();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Edit mode helpers
+  // ---------------------------------------------------------------------------
+
+  void _toggleEditMode() {
+    setState(() {
+      _editMode = !_editMode;
+      if (!_editMode) {
+        _selectedComponentId = null;
+        _selectedSurfaceId = null;
+      }
+    });
+  }
+
+  void _selectComponent(String componentId, String surfaceId) {
+    setState(() {
+      _selectedComponentId = componentId;
+      _selectedSurfaceId = surfaceId;
+    });
+    _canvasFocusNode.requestFocus();
+  }
+
+  void _deselectComponent() {
+    setState(() {
+      _selectedComponentId = null;
+      _selectedSurfaceId = null;
+    });
+  }
+
+  A2UISurface? get _selectedSurface =>
+      _selectedSurfaceId != null ? _surfaces[_selectedSurfaceId!] : null;
+
+  A2UIComponent? get _selectedComponent {
+    final surface = _selectedSurface;
+    if (surface == null || _selectedComponentId == null) return null;
+    return surface.components[_selectedComponentId!];
+  }
+
+  /// Push undo snapshot, perform an edit, then trigger rebuild + agent sync.
+  void _performEdit(VoidCallback edit) {
+    _undoRedo.pushSnapshot(_surfaces);
+    edit();
+    _syncEditToAgent();
+    setState(() {});
+  }
+
+  void _handleUndo() {
+    if (_undoRedo.undo(_surfaces)) {
+      _selectedComponentId = null;
+      _selectedSurfaceId = null;
+      setState(() {});
+    }
+  }
+
+  void _handleRedo() {
+    if (_undoRedo.redo(_surfaces)) {
+      _selectedComponentId = null;
+      _selectedSurfaceId = null;
+      setState(() {});
+    }
+  }
+
+  void _deleteSelected() {
+    final surface = _selectedSurface;
+    final compId = _selectedComponentId;
+    if (surface == null || compId == null) return;
+    // Don't allow deleting the root
+    if (compId == surface.rootId) return;
+    _performEdit(() {
+      removeComponent(compId, surface);
+    });
+    _selectedComponentId = null;
+    _selectedSurfaceId = null;
+  }
+
+  void _addComponent(ComponentTemplate template) {
+    // Find the target container: selected component if it's a container,
+    // or the parent of the selected component, or the root.
+    A2UISurface? targetSurface = _selectedSurface;
+    if (targetSurface == null && _surfaces.isNotEmpty) {
+      targetSurface = _surfaces.values.first;
+    }
+    if (targetSurface == null) return;
+
+    String? containerId;
+    if (_selectedComponentId != null) {
+      final sel = targetSurface.components[_selectedComponentId!];
+      if (sel != null && isContainer(sel.type)) {
+        containerId = sel.id;
+      } else if (sel != null) {
+        final parent = findParent(sel.id, targetSurface);
+        if (parent != null && isContainer(parent.type)) {
+          containerId = parent.id;
+        }
+      }
+    }
+    containerId ??= targetSurface.rootId;
+    if (containerId == null) return;
+
+    final container = targetSurface.components[containerId];
+    if (container == null) return;
+
+    final surf = targetSurface; // local non-null binding for closure
+    _performEdit(() {
+      final id = genComponentId();
+      final newComp = template.create(id);
+      surf.components[id] = newComp;
+
+      // For Button, also add the child Text component
+      if (template.type == 'Button') {
+        final textId = '${id}-label';
+        surf.components[textId] = A2UIComponent(
+          id: textId,
+          type: 'Text',
+          props: {'text': {'literalString': 'Click me'}},
+        );
+      }
+
+      // Add to container's children
+      final childIds = resolveChildIds(container);
+      childIds.add(id);
+      setChildIds(container, childIds);
+    });
+
+    _selectedComponentId = null;
+  }
+
+  void _reorderChild(A2UISurface surface, A2UIComponent parent, int oldIndex, int newIndex) {
+    _performEdit(() {
+      final ids = resolveChildIds(parent);
+      if (oldIndex < 0 || oldIndex >= ids.length) return;
+      if (newIndex < 0 || newIndex >= ids.length) return;
+      final item = ids.removeAt(oldIndex);
+      ids.insert(newIndex, item);
+      setChildIds(parent, ids);
+    });
+  }
+
+  /// Sync the current surface state to the agent as a chat message.
+  /// Debounced to avoid flooding the agent during rapid edits.
+  void _syncEditToAgent() {
+    _syncDebounce?.cancel();
+    _syncDebounce = Timer(const Duration(milliseconds: 800), () {
+      if (!mounted || _surfaces.isEmpty) return;
+      final jsonl = surfacesToJsonl(_surfaces);
+      if (jsonl.isEmpty) return;
+      final client = ref.read(gatewayClientProvider);
+      client.sendChatMessage('/a2ui-edit $jsonl');
+    });
+  }
+
+  /// Canvas-scoped keyboard handler. Only intercepts Ctrl+Z/Y when the canvas
+  /// focus node has focus — never steals from the prompt bar.
+  KeyEventResult _handleCanvasKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    if (!_editMode) return KeyEventResult.ignored;
+
+    final isCtrl = HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isMetaPressed;
+
+    // Only handle undo/redo when the canvas focus node itself is primary
+    // (not a child TextField in the property inspector). This prevents
+    // stealing Ctrl+Z from text inputs and the prompt bar.
+    final isCanvasFocused =
+        FocusManager.instance.primaryFocus == _canvasFocusNode;
+
+    if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyZ && isCanvasFocused) {
+      if (HardwareKeyboard.instance.isShiftPressed) {
+        _handleRedo();
+      } else {
+        _handleUndo();
+      }
+      return KeyEventResult.handled;
+    }
+    if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyY && isCanvasFocused) {
+      _handleRedo();
+      return KeyEventResult.handled;
+    }
+    // Delete key — only handle if the canvas focus node itself is the
+    // primary focus (not a child TextField in the property inspector)
+    if (event.logicalKey == LogicalKeyboardKey.delete ||
+        event.logicalKey == LogicalKeyboardKey.backspace) {
+      if (_selectedComponentId != null &&
+          FocusManager.instance.primaryFocus == _canvasFocusNode) {
+        _deleteSelected();
+        return KeyEventResult.handled;
+      }
+    }
+    // Escape to deselect
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      _deselectComponent();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
   }
 
   @override
@@ -411,66 +621,183 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
       );
     }
 
-    // #23: AnimatedSwitcher for surface transitions + export toolbar
-    return Stack(
+    // Canvas content: surface list with optional property inspector
+    final canvasContent = Row(
       children: [
-        RepaintBoundary(
-          key: _repaintBoundaryKey,
-          child: AnimatedSwitcher(
-            duration: const Duration(milliseconds: 200),
-            child: ListView(
-              key: ValueKey(_surfaces.keys.join(',')),
-              padding: const EdgeInsets.all(12),
-              children: _surfaces.values.map((surface) {
-                if (surface.rootId == null) return const SizedBox.shrink();
-                final rootComponent = surface.components[surface.rootId];
-                if (rootComponent == null) return const SizedBox.shrink();
-                return KeyedSubtree(
-                  key: ValueKey('surface-${surface.surfaceId}'),
-                  child: _renderComponent(rootComponent, surface, theme, t),
-                );
-              }).toList(),
+        // Main surface area
+        Expanded(
+          child: GestureDetector(
+            onTap: _editMode ? _deselectComponent : null,
+            behavior: HitTestBehavior.translucent,
+            child: RepaintBoundary(
+              key: _repaintBoundaryKey,
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 200),
+                child: ListView(
+                  key: ValueKey('${_surfaces.keys.join(',')}-$_editMode'),
+                  padding: const EdgeInsets.only(
+                      left: 12, right: 12, top: 32, bottom: 12),
+                  children: _surfaces.values.map((surface) {
+                    if (surface.rootId == null) return const SizedBox.shrink();
+                    final rootComponent = surface.components[surface.rootId];
+                    if (rootComponent == null) return const SizedBox.shrink();
+                    return KeyedSubtree(
+                      key: ValueKey('surface-${surface.surfaceId}'),
+                      child: _renderComponent(
+                          rootComponent, surface, theme, t),
+                    );
+                  }).toList(),
+                ),
+              ),
             ),
           ),
         ),
-        // Export toolbar: copy image button (standalone) + download menu
-        Positioned(
-          top: 4,
-          right: 4,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Copy image button (standalone, separate from menu)
-              GestureDetector(
-                onTap: _copyAsImage,
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.click,
-                  child: Container(
-                    padding: const EdgeInsets.all(4),
-                    decoration: BoxDecoration(
-                      color: t.surfaceBase.withOpacity(0.8),
-                      border: Border.all(color: t.border, width: 0.5),
+        // Property inspector (edit mode only)
+        if (_editMode && _selectedComponent != null && _selectedSurface != null)
+          PropertyInspector(
+            key: ValueKey('prop-${_selectedComponentId}'),
+            component: _selectedComponent!,
+            surface: _selectedSurface!,
+            tokens: t,
+            theme: theme,
+            onEdited: () {
+              _undoRedo.pushSnapshot(_surfaces);
+              _syncEditToAgent();
+              setState(() {});
+            },
+            onDelete: _deleteSelected,
+            onDeselect: _deselectComponent,
+            onReorder: (oldIndex, newIndex) {
+              final parent = findParent(
+                  _selectedComponentId!, _selectedSurface!);
+              if (parent != null) {
+                _reorderChild(_selectedSurface!, parent, oldIndex, newIndex);
+              }
+            },
+          ),
+      ],
+    );
+
+    // Wrap with Focus for canvas-scoped keyboard shortcuts
+    return Focus(
+      focusNode: _canvasFocusNode,
+      onKeyEvent: _handleCanvasKeyEvent,
+      child: Stack(
+        children: [
+          canvasContent,
+          // Toolbar row: palette + undo/redo + edit toggle + export
+          Positioned(
+            top: 4,
+            left: 4,
+            right: 4,
+            child: Row(
+              children: [
+                // Left side: edit mode controls
+                if (_editMode) ...[
+                  ComponentPalette(
+                    onAdd: (template) => _addComponent(template),
+                    tokens: t,
+                  ),
+                  const SizedBox(width: 4),
+                  _toolbarButton(
+                    icon: Icons.undo,
+                    onTap: _undoRedo.canUndo ? _handleUndo : null,
+                    tokens: t,
+                    tooltip: 'undo',
+                  ),
+                  const SizedBox(width: 2),
+                  _toolbarButton(
+                    icon: Icons.redo,
+                    onTap: _undoRedo.canRedo ? _handleRedo : null,
+                    tokens: t,
+                    tooltip: 'redo',
+                  ),
+                ],
+                const Spacer(),
+                // Right side: edit toggle + copy + export
+                _toolbarButton(
+                  icon: _editMode ? Icons.edit : Icons.edit_outlined,
+                  onTap: _toggleEditMode,
+                  tokens: t,
+                  active: _editMode,
+                  tooltip: _editMode ? 'exit edit' : 'edit',
+                ),
+                const SizedBox(width: 2),
+                // Copy image button
+                GestureDetector(
+                  onTap: _copyAsImage,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        borderRadius: kShellBorderRadiusSm,
+                        color: t.surfaceBase.withOpacity(0.8),
+                        border: Border.all(color: t.border, width: 0.5),
+                      ),
+                      child: _copyingImage
+                          ? SizedBox(
+                              width: 12,
+                              height: 12,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 1.5, color: t.accentPrimary))
+                          : Icon(
+                              _imageCopied ? Icons.check : Icons.content_copy,
+                              size: 12,
+                              color:
+                                  _imageCopied ? t.accentPrimary : t.fgMuted,
+                            ),
                     ),
-                    child: _copyingImage
-                      ? SizedBox(
-                          width: 12, height: 12,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 1.5, color: t.accentPrimary))
-                      : Icon(
-                          _imageCopied ? Icons.check : Icons.content_copy,
-                          size: 12,
-                          color: _imageCopied ? t.accentPrimary : t.fgMuted,
-                        ),
                   ),
                 ),
+                const SizedBox(width: 2),
+                // Download menu
+                _buildExportToolbar(t, theme),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _toolbarButton({
+    required IconData icon,
+    required VoidCallback? onTap,
+    required ShellTokens tokens,
+    bool active = false,
+    String? tooltip,
+  }) {
+    final enabled = onTap != null;
+    return Tooltip(
+      message: tooltip ?? '',
+      waitDuration: const Duration(milliseconds: 500),
+      child: GestureDetector(
+        onTap: onTap,
+        child: MouseRegion(
+          cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+          child: Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              borderRadius: kShellBorderRadiusSm,
+              color: active
+                  ? tokens.accentPrimary.withOpacity(0.15)
+                  : tokens.surfaceBase.withOpacity(0.8),
+              border: Border.all(
+                color: active ? tokens.accentPrimary : tokens.border,
+                width: 0.5,
               ),
-              const SizedBox(width: 2),
-              // Download menu
-              _buildExportToolbar(t, theme),
-            ],
+            ),
+            child: Icon(icon,
+                size: 12,
+                color: active
+                    ? tokens.accentPrimary
+                    : enabled
+                        ? tokens.fgMuted
+                        : tokens.fgDisabled),
           ),
         ),
-      ],
+      ),
     );
   }
 
@@ -490,6 +817,7 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
               child: Container(
                 padding: const EdgeInsets.all(4),
                 decoration: BoxDecoration(
+                  borderRadius: kShellBorderRadiusSm,
                   color: t.surfaceBase.withOpacity(0.8),
                   border: Border.all(color: t.border, width: 0.5),
                 ),
@@ -501,6 +829,7 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
             const SizedBox(height: 2),
             Container(
               decoration: BoxDecoration(
+                borderRadius: kShellBorderRadiusSm,
                 color: t.surfaceBase,
                 border: Border.all(color: t.border, width: 0.5),
               ),
@@ -632,6 +961,18 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
         );
     }
 
+    // In edit mode, wrap with selection overlay
+    if (_editMode) {
+      return EditableComponentWrapper(
+        key: ValueKey('edit-${component.id}'),
+        componentId: component.id,
+        isSelected: _selectedComponentId == component.id,
+        onSelect: () => _selectComponent(component.id, surface.surfaceId),
+        tokens: t,
+        child: child,
+      );
+    }
+
     return KeyedSubtree(key: ValueKey(component.id), child: child);
   }
 
@@ -662,6 +1003,9 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
     final distribution = c.props['distribution'] as String?;
     final alignment = c.props['alignment'] as String?;
 
+    // In edit mode, add move-up/move-down handles via the selection wrapper.
+    // We keep the regular Column but the EditableComponentWrapper around each
+    // child already provides selection + the property inspector shows reorder.
     return Column(
       crossAxisAlignment: _parseCrossAxisAlignment(alignment) ?? CrossAxisAlignment.start,
       mainAxisAlignment: _parseMainAxisAlignment(distribution) ?? MainAxisAlignment.start,
@@ -706,7 +1050,7 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
         for (final entry in ctxRaw) {
           if (entry is Map<String, dynamic>) {
             final key = entry['key'] as String?;
-            if (key != null) actionContext[key] = entry['value'] ?? entry;
+            if (key != null) actionContext[key] = entry['value'];
           }
         }
       }
@@ -733,7 +1077,7 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
         style: ElevatedButton.styleFrom(
           backgroundColor: primary ? theme.colorScheme.primary : theme.colorScheme.surface,
           foregroundColor: primary ? theme.colorScheme.onPrimary : theme.colorScheme.onSurface,
-          shape: const RoundedRectangleBorder(),
+          shape: RoundedRectangleBorder(borderRadius: kShellBorderRadiusSm),
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         ),
         child: childWidget ?? Text(label),
@@ -820,7 +1164,7 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
         if (contentChildId != null && surface.components.containsKey(contentChildId)) {
           showDialog(context: context, builder: (dialogContext) {
             return Dialog(
-              shape: const RoundedRectangleBorder(),
+              shape: RoundedRectangleBorder(borderRadius: kShellBorderRadius),
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: SingleChildScrollView(
@@ -926,10 +1270,13 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
     );
   }
 
-  // #21: Create a scoped surface for list item rendering
+  // #21: Create a scoped surface for list item rendering.
+  // Deep-copy the data model so scoped setPath writes don't bleed into the
+  // parent surface. Components are shared read-only references (not mutated
+  // during rendering).
   A2UISurface _createItemScope(A2UISurface parent, dynamic item, int index) {
     final scoped = A2UISurface(surfaceId: parent.surfaceId);
-    scoped.dataModel.addAll(parent.dataModel);
+    scoped.dataModel.addAll(_deepCopyMap(parent.dataModel));
     scoped.components.addAll(parent.components);
     scoped.rootId = parent.rootId;
     if (item is Map<String, dynamic>) {
@@ -937,6 +1284,29 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
     }
     scoped.setPath('_index', index);
     return scoped;
+  }
+
+  /// Recursively deep-copy a JSON-like map so nested maps are independent.
+  static Map<String, dynamic> _deepCopyMap(Map<String, dynamic> source) {
+    final copy = <String, dynamic>{};
+    for (final entry in source.entries) {
+      if (entry.value is Map<String, dynamic>) {
+        copy[entry.key] = _deepCopyMap(entry.value as Map<String, dynamic>);
+      } else if (entry.value is List) {
+        copy[entry.key] = _deepCopyList(entry.value as List);
+      } else {
+        copy[entry.key] = entry.value;
+      }
+    }
+    return copy;
+  }
+
+  static List _deepCopyList(List source) {
+    return source.map((e) {
+      if (e is Map<String, dynamic>) return _deepCopyMap(e);
+      if (e is List) return _deepCopyList(e);
+      return e;
+    }).toList();
   }
 
   Widget _renderProgress(A2UIComponent c, A2UISurface surface, ThemeData theme, ShellTokens t) {
@@ -1191,6 +1561,9 @@ class _A2UISliderState extends State<_A2UISlider> {
   @override
   void didUpdateWidget(covariant _A2UISlider oldWidget) {
     super.didUpdateWidget(oldWidget);
+    _min = (widget.component.props['min'] as num?)?.toDouble() ?? 0;
+    _max = (widget.component.props['max'] as num?)?.toDouble() ?? 100;
+    _valuePath = _extractPath(widget.component.props['value']);
     final newValue = (resolveBoundNum(widget.component.props['value'], widget.surface) ?? _min)
         .toDouble().clamp(_min, _max);
     if ((newValue - _current).abs() > 0.001) setState(() => _current = newValue);
@@ -1203,6 +1576,30 @@ class _A2UISliderState extends State<_A2UISlider> {
 
   @override
   Widget build(BuildContext context) {
+    final label = resolveBoundString(widget.component.props['label'], widget.surface);
+    if (label.isNotEmpty) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 2),
+            child: Text(label, style: TextStyle(
+              fontSize: 12, color: widget.tokens.fgMuted)),
+          ),
+          Slider(
+            value: _current,
+            min: _min,
+            max: _max,
+            activeColor: widget.tokens.accentPrimary,
+            onChanged: (v) {
+              setState(() => _current = v);
+              if (_valuePath != null) widget.surface.setPath(_valuePath!, v);
+            },
+          ),
+        ],
+      );
+    }
     return Slider(
       value: _current,
       min: _min,
@@ -1408,9 +1805,11 @@ class _A2UICodeEditorState extends State<_A2UICodeEditor> {
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Container(
         decoration: BoxDecoration(
+          borderRadius: kShellBorderRadius,
           color: t.surfaceBase,
           border: Border.all(color: t.border, width: 0.5),
         ),
+        clipBehavior: Clip.antiAlias,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -1427,6 +1826,7 @@ class _A2UICodeEditorState extends State<_A2UICodeEditor> {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                       decoration: BoxDecoration(
+                        borderRadius: kShellBorderRadiusSm,
                         border: Border.all(color: t.border, width: 0.5),
                       ),
                       child: Text(language,

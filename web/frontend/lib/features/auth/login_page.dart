@@ -241,6 +241,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                       width: 14,
                       height: 14,
                       decoration: BoxDecoration(
+                        borderRadius: const BorderRadius.all(Radius.circular(3)),
                         color: _rememberEmail ? t.accentPrimary : Colors.transparent,
                         border: Border.all(
                           color: _rememberEmail ? t.accentPrimary : t.border,

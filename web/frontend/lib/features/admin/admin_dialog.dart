@@ -42,7 +42,7 @@ class _AdminDialogState extends ConsumerState<AdminDialog> {
     return Dialog(
       backgroundColor: t.surfaceBase,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.zero,
+        borderRadius: kShellBorderRadius,
         side: BorderSide(color: t.border, width: 0.5),
       ),
       child: Container(

@@ -22,6 +22,7 @@ class ChatEntry {
   final String role; // 'user', 'assistant', 'tool', 'system'
   final String content;
   final String? toolName;
+  final String? toolCallId; // e.g. 'functions.read:0' -- used to match results to calls
   final bool isStreaming;
   final DateTime timestamp;
   final List<Map<String, dynamic>>? attachments;
@@ -30,6 +31,7 @@ class ChatEntry {
     required this.role,
     required this.content,
     this.toolName,
+    this.toolCallId,
     this.isStreaming = false,
     this.attachments,
     DateTime? timestamp,
@@ -39,6 +41,7 @@ class ChatEntry {
         role: role,
         content: content ?? this.content,
         toolName: toolName,
+        toolCallId: toolCallId,
         isStreaming: isStreaming ?? this.isStreaming,
         attachments: attachments,
         timestamp: timestamp,
@@ -139,16 +142,20 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
               // 'toolResult' (gateway camelCase) -> 'tool' (Flutter card)
               final rawRole = msg['role'] as String? ?? 'system';
               final role = rawRole == 'toolResult' ? 'tool' : rawRole;
-              // Extract tool name for tool card labels
+              // Extract tool name and toolCallId for tool card labels + matching
               final toolName = msg['toolName'] as String? ??
                   msg['name'] as String? ??
                   (role == 'tool' ? 'tool' : null);
+              final toolCallId = role == 'tool'
+                  ? (msg['toolCallId'] as String? ?? msg['id'] as String?)
+                  : null;
               // Extract image attachments from history content blocks
               final historyAttachments = _extractImageAttachments(msg['content']);
               _entries.add(ChatEntry(
                 role: role,
                 content: content,
                 toolName: toolName,
+                toolCallId: toolCallId,
                 timestamp: timestamp,
                 attachments: historyAttachments.isNotEmpty ? historyAttachments : null,
               ));
@@ -157,7 +164,7 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
           // Seed _lastCanvasSurface from history so the poll doesn't
           // re-render stale surfaces from previous runs.
           _seedLastCanvasSurface(messages);
-          _scrollToBottom();
+          _jumpToBottomAfterLayout();
         }
       }
     } catch (e) {
@@ -287,6 +294,42 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
     }
   }
 
+  /// Find the matching tool entry and update its content.
+  /// When [toolCallId] is provided, searches for the exact entry with that ID
+  /// (required for parallel tool calls like 3 concurrent reads).
+  /// Falls back to the most recent tool entry within the current turn if
+  /// no ID match is found (backward compat with older gateway versions).
+  void _updateLastToolEntry(String content, {
+    bool isStreaming = false,
+    String? toolCallId,
+  }) {
+    // First pass: match by toolCallId if available
+    if (toolCallId != null && toolCallId.isNotEmpty) {
+      for (int i = _entries.length - 1; i >= 0; i--) {
+        if (_entries[i].role == 'tool' &&
+            _entries[i].toolCallId == toolCallId) {
+          _entries[i] = _entries[i].copyWith(
+            content: content,
+            isStreaming: isStreaming,
+          );
+          return;
+        }
+        if (_entries[i].role == 'user') break;
+      }
+    }
+    // Fallback: find the most recent tool entry in the current turn
+    for (int i = _entries.length - 1; i >= 0; i--) {
+      if (_entries[i].role == 'tool') {
+        _entries[i] = _entries[i].copyWith(
+          content: content,
+          isStreaming: isStreaming,
+        );
+        return;
+      }
+      if (_entries[i].role == 'user') break;
+    }
+  }
+
   void _handleChatEvent(WsEvent event) {
     try {
       _handleChatEventInner(event);
@@ -393,9 +436,13 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
         } else if (phase == 'end') {
           setState(() {
             _agentThinking = false;
-            if (_entries.isNotEmpty && _entries.last.role == 'assistant') {
-              _entries[_entries.length - 1] =
-                  _entries.last.copyWith(isStreaming: false);
+            // Clear isStreaming on all entries still marked as streaming
+            // (assistant deltas and tool cards that never received a result).
+            for (int i = _entries.length - 1; i >= 0; i--) {
+              if (_entries[i].isStreaming) {
+                _entries[i] = _entries[i].copyWith(isStreaming: false);
+              }
+              if (_entries[i].role == 'user') break;
             }
           });
           // Only poll for canvas surface if tool calls were detected (seq gap)
@@ -409,6 +456,8 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
             dataMap?['name'] as String? ??
             'tool';
         final phase = dataMap?['phase'] as String?;
+        final toolCallId = dataMap?['id'] as String? ??
+            dataMap?['toolCallId'] as String?;
         final result = dataMap?['result']?.toString() ??
             dataMap?['output']?.toString() ??
             '';
@@ -418,24 +467,14 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
           if (result.startsWith('__A2UI__')) {
             _handleA2UIToolResult(result);
             setState(() {
-              if (_entries.isNotEmpty && _entries.last.role == 'tool') {
-                _entries[_entries.length - 1] = _entries.last.copyWith(
-                  content: 'Canvas updated',
-                  isStreaming: false,
-                );
-              }
+              _updateLastToolEntry('Canvas updated', toolCallId: toolCallId);
             });
           } else {
             // Extract MEDIA: tokens from tool result and render as images
             final mediaImages = _extractMediaUrls(result);
             final displayResult = result.isNotEmpty ? result : 'Done';
             setState(() {
-              if (_entries.isNotEmpty && _entries.last.role == 'tool') {
-                _entries[_entries.length - 1] = _entries.last.copyWith(
-                  content: displayResult,
-                  isStreaming: false,
-                );
-              }
+              _updateLastToolEntry(displayResult, toolCallId: toolCallId);
               // Add image entries for any MEDIA: tokens found in tool output
               for (final url in mediaImages) {
                 _entries.add(ChatEntry(
@@ -454,32 +493,26 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
               role: 'tool',
               content: args,
               toolName: toolName,
+              toolCallId: toolCallId,
               isStreaming: true,
             ));
           });
         }
       } else if (stream == 'tool_result') {
+        final toolCallId = dataMap?['id'] as String? ??
+            dataMap?['toolCallId'] as String?;
         final result = dataMap?['result']?.toString() ??
             dataMap?['output']?.toString() ??
             '';
         if (result.startsWith('__A2UI__')) {
           _handleA2UIToolResult(result);
           setState(() {
-            if (_entries.isNotEmpty && _entries.last.role == 'tool') {
-              _entries[_entries.length - 1] = _entries.last.copyWith(
-                content: 'Canvas updated',
-                isStreaming: false,
-              );
-            }
+            _updateLastToolEntry('Canvas updated', toolCallId: toolCallId);
           });
         } else {
           setState(() {
-            if (_entries.isNotEmpty && _entries.last.role == 'tool') {
-              _entries[_entries.length - 1] = _entries.last.copyWith(
-                content: result,
-                isStreaming: false,
-              );
-            }
+            _updateLastToolEntry(result.isNotEmpty ? result : 'Done',
+                toolCallId: toolCallId);
           });
         }
       }
@@ -578,6 +611,23 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
     });
   }
 
+  /// Jump to bottom without animation -- used after history load where the
+  /// ListView content may settle across multiple frames (markdown rendering,
+  /// image placeholders, font loading). Two post-frame passes ensure we
+  /// catch late layout shifts.
+  void _jumpToBottomAfterLayout() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollController.hasClients) return;
+      _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+      // Second pass: catch any remaining layout shifts from async content
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scrollController.hasClients) {
+          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+        }
+      });
+    });
+  }
+
   @override
   void dispose() {
     _chatSub?.cancel();
@@ -610,6 +660,7 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
               width: 36,
               height: 36,
               decoration: BoxDecoration(
+                borderRadius: kShellBorderRadius,
                 border: Border.all(color: t.border, width: 0.5),
               ),
               child: Icon(Icons.chat_outlined, size: 16, color: t.fgMuted),
@@ -666,6 +717,7 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
                   width: 28,
                   height: 28,
                   decoration: BoxDecoration(
+                    borderRadius: kShellBorderRadius,
                     color: t.surfaceCard,
                     border: Border.all(color: t.border, width: 0.5),
                   ),
@@ -704,6 +756,7 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             decoration: BoxDecoration(
+              borderRadius: kShellBorderRadius,
               color: t.surfaceCard,
               border: Border.all(color: t.border, width: 0.5),
             ),
@@ -779,6 +832,7 @@ class _UserBubbleState extends State<_UserBubble> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final t = ShellTokens.of(context);
+    final baseStyle = theme.textTheme.bodyLarge ?? const TextStyle();
     return MouseRegion(
       onEnter: (_) => setState(() => _hovering = true),
       onExit: (_) => setState(() => _hovering = false),
@@ -796,6 +850,7 @@ class _UserBubbleState extends State<_UserBubble> {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
+                  borderRadius: kShellBorderRadius,
                   color: t.accentPrimary.withOpacity(0.08),
                   border: Border.all(color: t.accentPrimary.withOpacity(0.18), width: 0.5),
                 ),
@@ -819,8 +874,10 @@ class _UserBubbleState extends State<_UserBubble> {
                               return Container(
                                 constraints: const BoxConstraints(maxWidth: 180, maxHeight: 120),
                                 decoration: BoxDecoration(
+                                  borderRadius: kShellBorderRadiusSm,
                                   border: Border.all(color: t.border, width: 0.5),
                                 ),
+                                clipBehavior: Clip.antiAlias,
                                 child: Image.memory(
                                   cachedBytes,
                                   fit: BoxFit.cover,
@@ -860,6 +917,7 @@ class _UserBubbleState extends State<_UserBubble> {
                             return Container(
                               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                               decoration: BoxDecoration(
+                                borderRadius: kShellBorderRadiusSm,
                                 color: t.surfaceCard,
                                 border: Border.all(color: t.border, width: 0.5),
                               ),
@@ -877,11 +935,32 @@ class _UserBubbleState extends State<_UserBubble> {
                         ),
                       ),
                     if (widget.entry.content.isNotEmpty && widget.entry.content != '[attachment]')
-                      SelectableText(
-                        widget.entry.content,
-                        style: theme.textTheme.bodyLarge?.copyWith(
-                          color: t.fgPrimary,
-                          height: 1.5,
+                      SelectionArea(
+                        child: MarkdownBody(
+                          data: widget.entry.content,
+                          selectable: false,
+                          styleSheet: MarkdownStyleSheet(
+                            p: baseStyle.copyWith(color: t.fgPrimary),
+                            code: baseStyle.copyWith(fontSize: 13, color: t.accentPrimary, backgroundColor: t.surfaceCodeInline),
+                            codeblockDecoration: BoxDecoration(
+                              borderRadius: kShellBorderRadiusSm,
+                              color: t.surfaceBase,
+                              border: Border(left: BorderSide(color: t.border, width: 2)),
+                            ),
+                            codeblockPadding: const EdgeInsets.only(left: 12, top: 8, bottom: 8, right: 8),
+                            strong: baseStyle.copyWith(fontWeight: FontWeight.bold, color: t.fgPrimary),
+                            em: baseStyle.copyWith(fontStyle: FontStyle.italic, color: t.fgPrimary),
+                            a: baseStyle.copyWith(
+                              color: t.accentPrimary,
+                              decoration: TextDecoration.underline,
+                              decorationColor: t.accentPrimaryMuted,
+                            ),
+                          ),
+                          onTapLink: (text, href, title) {
+                            if (href != null) {
+                              Clipboard.setData(ClipboardData(text: href));
+                            }
+                          },
                         ),
                       ),
                     const SizedBox(height: 4),
@@ -1052,86 +1131,92 @@ class _AssistantBubbleState extends State<_AssistantBubble> {
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
+                borderRadius: kShellBorderRadius,
                 color: t.surfaceCard,
                 border: Border.all(color: t.border, width: 0.5),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  MarkdownBody(
-                    data: _enrichContentWithImages(widget.entry.content),
-                    selectable: true,
-                    styleSheet: MarkdownStyleSheet(
-                      p: baseStyle,
-                      h1: baseStyle.copyWith(fontSize: 16, fontWeight: FontWeight.bold, color: t.fgPrimary),
-                      h2: baseStyle.copyWith(fontSize: 15, fontWeight: FontWeight.bold, color: t.fgPrimary),
-                      h3: baseStyle.copyWith(fontSize: 14, fontWeight: FontWeight.bold),
-                      code: baseStyle.copyWith(fontSize: 13, color: t.accentPrimary, backgroundColor: t.surfaceCodeInline),
-                      codeblockDecoration: BoxDecoration(
-                        color: t.surfaceBase,
-                        border: Border(left: BorderSide(color: t.border, width: 2)),
-                      ),
-                      codeblockPadding: const EdgeInsets.only(left: 12, top: 8, bottom: 8, right: 8),
-                      blockquoteDecoration: BoxDecoration(
-                        border: Border(left: BorderSide(color: t.fgDisabled, width: 2)),
-                      ),
-                      blockquotePadding: const EdgeInsets.only(left: 12, top: 4, bottom: 4),
-                      listBullet: baseStyle.copyWith(color: t.fgTertiary),
-                      strong: baseStyle.copyWith(fontWeight: FontWeight.bold),
-                      em: baseStyle.copyWith(fontStyle: FontStyle.italic),
-                      a: baseStyle.copyWith(
-                        color: t.accentPrimary,
-                        decoration: TextDecoration.underline,
-                        decorationColor: t.accentPrimaryMuted,
-                      ),
-                      tableHead: baseStyle.copyWith(fontWeight: FontWeight.bold),
-                      tableBorder: TableBorder.all(color: t.border, width: 0.5),
-                      tableHeadAlign: TextAlign.left,
-                      tableCellsPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      horizontalRuleDecoration: BoxDecoration(
-                        border: Border(top: BorderSide(color: t.border, width: 0.5)),
-                      ),
-                    ),
-                    imageBuilder: (uri, title, alt) {
-                      return ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 400, maxHeight: 300),
-                        child: Image.network(
-                          uri.toString(),
-                          fit: BoxFit.contain,
-                          loadingBuilder: (_, child, progress) {
-                            if (progress == null) return child;
-                            return SizedBox(
-                              height: 80,
-                              child: Center(child: SizedBox(
-                                width: 60,
-                                child: LinearProgressIndicator(
-                                  value: progress.expectedTotalBytes != null
-                                    ? progress.cumulativeBytesLoaded / progress.expectedTotalBytes!
-                                    : null,
-                                  backgroundColor: t.border,
-                                  color: t.accentPrimary,
-                                  minHeight: 2,
-                                ),
-                              )),
-                            );
-                          },
-                          errorBuilder: (_, __, ___) => Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: t.surfaceBase,
-                              border: Border.all(color: t.border, width: 0.5),
-                            ),
-                            child: Text('[image failed to load]',
-                              style: TextStyle(fontSize: 11, color: t.fgMuted)),
-                          ),
+                  SelectionArea(
+                    child: MarkdownBody(
+                      data: _enrichContentWithImages(widget.entry.content),
+                      selectable: false,
+                      styleSheet: MarkdownStyleSheet(
+                        p: baseStyle,
+                        h1: baseStyle.copyWith(fontSize: 16, fontWeight: FontWeight.bold, color: t.fgPrimary),
+                        h2: baseStyle.copyWith(fontSize: 15, fontWeight: FontWeight.bold, color: t.fgPrimary),
+                        h3: baseStyle.copyWith(fontSize: 14, fontWeight: FontWeight.bold),
+                        code: baseStyle.copyWith(fontSize: 13, color: t.accentPrimary, backgroundColor: t.surfaceCodeInline),
+                        codeblockDecoration: BoxDecoration(
+                          borderRadius: kShellBorderRadiusSm,
+                          color: t.surfaceBase,
+                          border: Border(left: BorderSide(color: t.border, width: 2)),
                         ),
-                      );
-                    },
-                    onTapLink: (text, href, title) {
-                      if (href != null) {
-                        Clipboard.setData(ClipboardData(text: href));
-                      }
-                    },
+                        codeblockPadding: const EdgeInsets.only(left: 12, top: 8, bottom: 8, right: 8),
+                        blockquoteDecoration: BoxDecoration(
+                          borderRadius: kShellBorderRadiusSm,
+                          border: Border(left: BorderSide(color: t.fgDisabled, width: 2)),
+                        ),
+                        blockquotePadding: const EdgeInsets.only(left: 12, top: 4, bottom: 4),
+                        listBullet: baseStyle.copyWith(color: t.fgTertiary),
+                        strong: baseStyle.copyWith(fontWeight: FontWeight.bold),
+                        em: baseStyle.copyWith(fontStyle: FontStyle.italic),
+                        a: baseStyle.copyWith(
+                          color: t.accentPrimary,
+                          decoration: TextDecoration.underline,
+                          decorationColor: t.accentPrimaryMuted,
+                        ),
+                        tableHead: baseStyle.copyWith(fontWeight: FontWeight.bold),
+                        tableBorder: TableBorder.all(color: t.border, width: 0.5),
+                        tableHeadAlign: TextAlign.left,
+                        tableCellsPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        horizontalRuleDecoration: BoxDecoration(
+                          border: Border(top: BorderSide(color: t.border, width: 0.5)),
+                        ),
+                      ),
+                      imageBuilder: (uri, title, alt) {
+                        return ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 400, maxHeight: 300),
+                          child: Image.network(
+                            uri.toString(),
+                            fit: BoxFit.contain,
+                            loadingBuilder: (_, child, progress) {
+                              if (progress == null) return child;
+                              return SizedBox(
+                                height: 80,
+                                child: Center(child: SizedBox(
+                                  width: 60,
+                                  child: LinearProgressIndicator(
+                                    value: progress.expectedTotalBytes != null
+                                      ? progress.cumulativeBytesLoaded / progress.expectedTotalBytes!
+                                      : null,
+                                    backgroundColor: t.border,
+                                    color: t.accentPrimary,
+                                    minHeight: 2,
+                                  ),
+                                )),
+                              );
+                            },
+                            errorBuilder: (_, __, ___) => Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                borderRadius: kShellBorderRadiusSm,
+                                color: t.surfaceBase,
+                                border: Border.all(color: t.border, width: 0.5),
+                              ),
+                              child: Text('[image failed to load]',
+                                style: TextStyle(fontSize: 11, color: t.fgMuted)),
+                            ),
+                          ),
+                        );
+                      },
+                      onTapLink: (text, href, title) {
+                        if (href != null) {
+                          Clipboard.setData(ClipboardData(text: href));
+                        }
+                      },
+                    ),
                   ),
                   if (widget.entry.isStreaming)
                     const Padding(
@@ -1250,6 +1335,9 @@ class _ToolCard extends StatefulWidget {
 }
 
 class _ToolCardState extends State<_ToolCard> {
+  static const int _collapsedLimit = 300;
+  static const int _expandedLimit = 1500;
+
   bool _expanded = false;
 
   @override
@@ -1258,16 +1346,30 @@ class _ToolCardState extends State<_ToolCard> {
     final t = ShellTokens.of(context);
     final toolName = widget.entry.toolName ?? 'tool';
     final content = widget.entry.content;
-    final isTruncated = content.length > 300;
-    final displayContent = _expanded || !isTruncated
-        ? content
-        : '${content.substring(0, 300)}...';
+    final canExpand = content.length > _collapsedLimit;
+    final hardCapped = content.length > _expandedLimit;
+
+    String displayContent;
+    if (!canExpand) {
+      displayContent = content;
+    } else if (_expanded) {
+      displayContent = hardCapped
+          ? '${content.substring(0, _expandedLimit)}... (truncated)'
+          : content;
+    } else {
+      displayContent = '${content.substring(0, _collapsedLimit)}...';
+    }
+
+    // Only show the toggle when there's content beyond 300 chars to reveal,
+    // but hide "show more" if already expanded and hard-capped (nothing more to do).
+    final showToggle = canExpand && !(_expanded && hardCapped);
 
     return Padding(
       padding: const EdgeInsets.only(top: 3, bottom: 3, right: 48),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
+          borderRadius: kShellBorderRadiusSm,
           color: t.surfaceBase,
           border: Border.all(color: t.border, width: 0.5),
         ),
@@ -1304,7 +1406,7 @@ class _ToolCardState extends State<_ToolCard> {
                   height: 1.4,
                 ),
               ),
-              if (isTruncated)
+              if (showToggle)
                 Padding(
                   padding: const EdgeInsets.only(top: 2),
                   child: GestureDetector(

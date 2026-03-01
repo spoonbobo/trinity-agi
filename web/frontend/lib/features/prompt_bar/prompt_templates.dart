@@ -163,6 +163,7 @@ class _PromptTemplatePanelState extends State<PromptTemplatePanel> {
       width: 320,
       constraints: const BoxConstraints(maxHeight: 360),
       decoration: BoxDecoration(
+        borderRadius: kShellBorderRadius,
         color: t.surfaceBase,
         border: Border.all(color: t.border, width: 0.5),
         boxShadow: [
@@ -173,6 +174,7 @@ class _PromptTemplatePanelState extends State<PromptTemplatePanel> {
           ),
         ],
       ),
+      clipBehavior: Clip.antiAlias,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -330,6 +332,7 @@ class _TemplateRowState extends State<_TemplateRow> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                 decoration: BoxDecoration(
+                  borderRadius: kShellBorderRadiusSm,
                   border: Border.all(color: t.border, width: 0.5),
                 ),
                 child: Text(widget.template.category,

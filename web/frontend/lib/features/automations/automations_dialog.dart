@@ -467,7 +467,7 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
     return Dialog(
       backgroundColor: t.surfaceBase,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.zero,
+        borderRadius: kShellBorderRadius,
         side: BorderSide(color: t.border, width: 0.5),
       ),
       child: Container(
@@ -854,6 +854,7 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                       decoration: BoxDecoration(
+                        borderRadius: kShellBorderRadiusSm,
                         border: Border.all(
                           color: _selectedDays.contains(i) ? t.accentPrimary : t.border,
                           width: 0.5,
@@ -964,6 +965,7 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
             decoration: BoxDecoration(
+              borderRadius: kShellBorderRadiusSm,
               border: Border.all(color: t.border, width: 0.5),
             ),
             child: Text(
@@ -977,6 +979,7 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
           constraints: const BoxConstraints(minWidth: 24),
           alignment: Alignment.center,
           decoration: BoxDecoration(
+            borderRadius: kShellBorderRadiusSm,
             border: Border.all(color: t.border, width: 0.5),
           ),
           child: Text(
@@ -993,6 +996,7 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
             decoration: BoxDecoration(
+              borderRadius: kShellBorderRadiusSm,
               border: Border.all(color: t.border, width: 0.5),
             ),
             child: Text(

@@ -112,6 +112,7 @@ class _CommandPaletteState extends State<CommandPalette> {
           width: 480,
           constraints: const BoxConstraints(maxHeight: 420),
           decoration: BoxDecoration(
+            borderRadius: kShellBorderRadius,
             color: t.surfaceBase,
             border: Border.all(color: t.border, width: 0.5),
             boxShadow: [
@@ -122,6 +123,7 @@ class _CommandPaletteState extends State<CommandPalette> {
               ),
             ],
           ),
+          clipBehavior: Clip.antiAlias,
           child: Focus(
             onKeyEvent: _handleKeyEvent,
             child: Column(
@@ -278,6 +280,7 @@ class _CommandRowState extends State<_CommandRow> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                 decoration: BoxDecoration(
+                  borderRadius: kShellBorderRadiusSm,
                   border: Border.all(color: t.border, width: 0.5),
                 ),
                 child: Text(

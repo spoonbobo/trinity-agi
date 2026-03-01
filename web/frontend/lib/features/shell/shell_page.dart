@@ -84,6 +84,7 @@ class _ShellPageState extends ConsumerState<ShellPage> {
     });
     _dropSub = html.document.body?.onDrop.listen((e) {
       e.preventDefault();
+      e.stopImmediatePropagation(); // Prevent duplicate dispatch in Flutter Web
       if (mounted) setState(() => _draggingOver = false);
       final files = e.dataTransfer.files;
       if (files == null || files.isEmpty) return;
@@ -509,6 +510,7 @@ class _ShellPageState extends ConsumerState<ShellPage> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
               decoration: BoxDecoration(
+                borderRadius: kShellBorderRadiusSm,
                 border: Border.all(color: t.border, width: 0.5),
               ),
               child: Text(activeSession,
@@ -565,6 +567,7 @@ class _ShellPageState extends ConsumerState<ShellPage> {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                   decoration: BoxDecoration(
+                    borderRadius: kShellBorderRadiusSm,
                     border: Border.all(color: t.border, width: 0.5),
                   ),
                   child: Text('ctrl+k',

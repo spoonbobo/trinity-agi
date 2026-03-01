@@ -41,6 +41,7 @@ class _PromptBarState extends ConsumerState<PromptBar> {
   List<_AttachmentInfo> _attachments = [];
   String? _attachError;     // Inline error for rejected files
   int _processingCount = 0; // Files currently being read/compressed
+  DateTime? _lastDropTime;  // Debounce guard for duplicate drop events
 
   @override
   void initState() {
@@ -287,6 +288,14 @@ class _PromptBarState extends ConsumerState<PromptBar> {
 
   /// Public: accept files from drag-and-drop (called by shell_page).
   void addDroppedFiles(List<html.File> files) {
+    // Debounce duplicate drop events (Flutter Web can dispatch twice within
+    // the same frame). Reject calls arriving within 100 ms of the last drop.
+    final now = DateTime.now();
+    if (_lastDropTime != null &&
+        now.difference(_lastDropTime!).inMilliseconds < 100) {
+      return;
+    }
+    _lastDropTime = now;
     for (final file in files) {
       _processFile(file);
     }
@@ -420,11 +429,12 @@ class _PromptBarState extends ConsumerState<PromptBar> {
           }
         }
         return Dialog(
-          shape: const RoundedRectangleBorder(),
+          shape: RoundedRectangleBorder(borderRadius: kShellBorderRadius),
           child: Container(
             width: 400,
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
+              borderRadius: kShellBorderRadius,
               color: t.surfaceBase,
               border: Border.all(color: t.border, width: 0.5),
             ),
@@ -454,6 +464,7 @@ class _PromptBarState extends ConsumerState<PromptBar> {
                 Container(
                   constraints: const BoxConstraints(maxHeight: 140),
                   decoration: BoxDecoration(
+                    borderRadius: kShellBorderRadiusSm,
                     border: Border.all(color: t.border, width: 0.5),
                   ),
                   child: TextField(
@@ -604,6 +615,7 @@ class _PromptBarState extends ConsumerState<PromptBar> {
                         margin: const EdgeInsets.only(right: 6),
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
+                          borderRadius: kShellBorderRadiusSm,
                           color: t.statusError.withOpacity(0.08),
                           border: Border.all(color: t.statusError.withOpacity(0.3), width: 0.5),
                         ),
@@ -633,6 +645,7 @@ class _PromptBarState extends ConsumerState<PromptBar> {
                         margin: const EdgeInsets.only(right: 6),
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
+                          borderRadius: kShellBorderRadiusSm,
                           color: t.surfaceCard,
                           border: Border.all(color: t.border, width: 0.5),
                         ),
@@ -851,6 +864,7 @@ class _AttachmentChipState extends State<_AttachmentChip> {
         margin: const EdgeInsets.only(right: 6),
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
+          borderRadius: kShellBorderRadiusSm,
           color: t.surfaceCard,
           border: Border.all(color: t.border, width: 0.5),
         ),

@@ -2,8 +2,13 @@ import 'package:flutter/material.dart';
 import 'dart:html' as html;
 
 enum AppFontFamily {
+  // Monospace
   ibmPlexMono,
   jetBrainsMono,
+  monofur,
+  // Sans-serif
+  inter,
+  geistSans,
 }
 
 const _themeModeStorageKey = 'trinity_theme_mode';
@@ -15,6 +20,12 @@ String appFontFamilyToStorage(AppFontFamily family) {
       return 'ibm-plex-mono';
     case AppFontFamily.jetBrainsMono:
       return 'jetbrains-mono';
+    case AppFontFamily.monofur:
+      return 'monofur';
+    case AppFontFamily.inter:
+      return 'inter';
+    case AppFontFamily.geistSans:
+      return 'geist-sans';
   }
 }
 
@@ -22,6 +33,12 @@ AppFontFamily appFontFamilyFromStorage(String? value) {
   switch (value) {
     case 'jetbrains-mono':
       return AppFontFamily.jetBrainsMono;
+    case 'monofur':
+      return AppFontFamily.monofur;
+    case 'inter':
+      return AppFontFamily.inter;
+    case 'geist-sans':
+      return AppFontFamily.geistSans;
     case 'ibm-plex-mono':
     default:
       return AppFontFamily.ibmPlexMono;
@@ -34,6 +51,25 @@ String appFontFamilyLabel(AppFontFamily family) {
       return 'IBM Plex Mono';
     case AppFontFamily.jetBrainsMono:
       return 'JetBrains Mono';
+    case AppFontFamily.monofur:
+      return 'Monofur';
+    case AppFontFamily.inter:
+      return 'Inter';
+    case AppFontFamily.geistSans:
+      return 'Geist';
+  }
+}
+
+/// Whether the font is monospace (true) or proportional sans-serif (false).
+bool appFontFamilyIsMono(AppFontFamily family) {
+  switch (family) {
+    case AppFontFamily.ibmPlexMono:
+    case AppFontFamily.jetBrainsMono:
+    case AppFontFamily.monofur:
+      return true;
+    case AppFontFamily.inter:
+    case AppFontFamily.geistSans:
+      return false;
   }
 }
 
@@ -44,6 +80,12 @@ String _fontFamilyName(AppFontFamily family) {
       return 'IBMPlexMono';
     case AppFontFamily.jetBrainsMono:
       return 'JetBrainsMono';
+    case AppFontFamily.monofur:
+      return 'Monofur';
+    case AppFontFamily.inter:
+      return 'Inter';
+    case AppFontFamily.geistSans:
+      return 'GeistSans';
   }
 }
 
@@ -64,6 +106,19 @@ TextStyle appFontStyle(
     fontSize: fontSize ?? textStyle?.fontSize,
   );
 }
+
+// ---------------------------------------------------------------------------
+// Shared geometry constants
+// ---------------------------------------------------------------------------
+
+/// Subtle border-radius applied to bubbles, cards, chips, and containers.
+/// Keeps the minimal aesthetic while softening harsh 90-degree corners.
+const kShellRadius = 6.0;
+const kShellBorderRadius = BorderRadius.all(Radius.circular(kShellRadius));
+
+/// Smaller radius for compact elements (badges, chips, inline code).
+const kShellRadiusSm = 4.0;
+const kShellBorderRadiusSm = BorderRadius.all(Radius.circular(kShellRadiusSm));
 
 // ---------------------------------------------------------------------------
 // Semantic tokens
@@ -207,7 +262,7 @@ ThemeData buildTheme(ShellTokens t, Brightness brightness, AppFontFamily fontFam
     cardTheme: CardThemeData(
       color: t.surfaceCard,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.zero,
+        borderRadius: kShellBorderRadius,
         side: BorderSide(color: t.border, width: 0.5),
       ),
       elevation: 0,

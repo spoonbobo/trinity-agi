@@ -381,7 +381,7 @@ class _SkillsDialogState extends ConsumerState<SkillsDialog> {
       builder: (ctx) => Dialog(
         backgroundColor: t.surfaceBase,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: kShellBorderRadius,
           side: BorderSide(color: t.border, width: 0.5),
         ),
         child: ConstrainedBox(
@@ -625,6 +625,7 @@ class _SkillsDialogState extends ConsumerState<SkillsDialog> {
                           h3: theme.textTheme.bodyMedium?.copyWith(color: t.fgPrimary, fontWeight: FontWeight.bold),
                           code: theme.textTheme.bodySmall?.copyWith(color: t.accentPrimary, fontSize: 11),
                           codeblockDecoration: BoxDecoration(
+                            borderRadius: kShellBorderRadiusSm,
                             color: t.surfaceCard,
                             border: Border.all(color: t.border, width: 0.5),
                           ),
@@ -699,7 +700,7 @@ class _SkillsDialogState extends ConsumerState<SkillsDialog> {
     return Dialog(
       backgroundColor: t.surfaceBase,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.zero,
+        borderRadius: kShellBorderRadius,
         side: BorderSide(color: t.border, width: 0.5),
       ),
       child: Container(

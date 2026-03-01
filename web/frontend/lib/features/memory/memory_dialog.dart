@@ -72,7 +72,7 @@ class _MemoryDialogState extends ConsumerState<MemoryDialog> {
     return Dialog(
       backgroundColor: t.surfaceBase,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.zero,
+        borderRadius: kShellBorderRadius,
         side: BorderSide(color: t.border, width: 0.5),
       ),
       child: Container(

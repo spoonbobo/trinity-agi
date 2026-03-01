@@ -36,7 +36,7 @@ class SettingsDialog extends ConsumerWidget {
     return Dialog(
       backgroundColor: t.surfaceBase,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.zero,
+        borderRadius: kShellBorderRadius,
         side: BorderSide(color: t.border, width: 0.5),
       ),
       child: Container(
@@ -114,20 +114,36 @@ class SettingsDialog extends ConsumerWidget {
                     // Font
                     Text(tr(language, 'font'), style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary)),
                     const SizedBox(height: 6),
-                    Wrap(
-                      spacing: 12,
+                    // Monospace group
+                    Row(
                       children: [
-                        _toggle(
-                          theme, t,
-                          appFontFamilyLabel(AppFontFamily.ibmPlexMono),
-                          font == AppFontFamily.ibmPlexMono,
-                          () => setFont(AppFontFamily.ibmPlexMono),
+                        Text('monospace', style: TextStyle(fontSize: 9, color: t.fgDisabled)),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Wrap(
+                            spacing: 12,
+                            children: [
+                              for (final f in AppFontFamily.values.where(appFontFamilyIsMono))
+                                _toggle(theme, t, appFontFamilyLabel(f), font == f, () => setFont(f)),
+                            ],
+                          ),
                         ),
-                        _toggle(
-                          theme, t,
-                          appFontFamilyLabel(AppFontFamily.jetBrainsMono),
-                          font == AppFontFamily.jetBrainsMono,
-                          () => setFont(AppFontFamily.jetBrainsMono),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    // Sans-serif group
+                    Row(
+                      children: [
+                        Text('sans-serif', style: TextStyle(fontSize: 9, color: t.fgDisabled)),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Wrap(
+                            spacing: 12,
+                            children: [
+                              for (final f in AppFontFamily.values.where((f) => !appFontFamilyIsMono(f)))
+                                _toggle(theme, t, appFontFamilyLabel(f), font == f, () => setFont(f)),
+                            ],
+                          ),
                         ),
                       ],
                     ),
@@ -145,23 +161,7 @@ class SettingsDialog extends ConsumerWidget {
                       ],
                     ),
 
-                    // Permissions (visible to all)
-                    const SizedBox(height: 18),
-                    Text('permissions', style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary)),
-                    const SizedBox(height: 6),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 4,
-                      children: authState.permissions.map((p) {
-                        return Text(
-                          p,
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: t.fgMuted,
-                            fontSize: 10,
-                          ),
-                        );
-                      }).toList(),
-                    ),
+
                   ],
                 ),
               ),
