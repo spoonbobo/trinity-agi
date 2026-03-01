@@ -1,3 +1,4 @@
+test/
 .dart_tool/
 .packages
 build/
@@ -6,4 +7,5 @@ build/
 *.iml
 .idea/
 .pub/
-# NOTE: pubspec.lock is intentionally committed for reproducible builds
+analysis_options.yaml
+.gitignore

@@ -18,7 +18,6 @@ dependencies:
   uuid: ^4.5.1
   json_annotation: ^4.9.0
   flutter_markdown: ^0.7.6
-  google_fonts: ^6.2.1
 
 dev_dependencies:
   flutter_test:
@@ -30,8 +29,17 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   fonts:
-    - family: monofur
+    - family: IBMPlexMono
       fonts:
-        - asset: fonts/monofur-Regular.ttf
-        - asset: fonts/monofur-Bold.ttf
+        - asset: fonts/IBMPlexMono-Regular.ttf
+        - asset: fonts/IBMPlexMono-Bold.ttf
           weight: 700
+        - asset: fonts/IBMPlexMono-Italic.ttf
+          style: italic
+    - family: JetBrainsMono
+      fonts:
+        - asset: fonts/JetBrainsMono-Regular.ttf
+        - asset: fonts/JetBrainsMono-Bold.ttf
+          weight: 700
+        - asset: fonts/JetBrainsMono-Italic.ttf
+          style: italic

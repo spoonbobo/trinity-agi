@@ -10,6 +10,7 @@ class GatewayMethods {
   static const health = 'health';
   static const systemPresence = 'system-presence';
   static const sessionsList = 'sessions.list';
+  static const sessionsDelete = 'sessions.delete';
   static const execApprovalResolve = 'exec.approval.resolve';
   static const toolsCatalog = 'tools.catalog';
 }

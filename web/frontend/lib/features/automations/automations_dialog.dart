@@ -10,61 +10,7 @@ import '../../core/providers.dart' show terminalClientProvider;
 
 enum AutomationTab { crons, hooks, webhooks, polls }
 
-enum CronCategory { existing, templates, presets }
-
-/// Hardcoded cron presets for quick-add.
-class CronPreset {
-  final String name;
-  final String schedule;
-  final String message;
-  final String session;
-  final String? tz;
-  final bool deleteAfterRun;
-
-  const CronPreset({
-    required this.name,
-    required this.schedule,
-    required this.message,
-    this.session = 'isolated',
-    this.tz,
-    this.deleteAfterRun = false,
-  });
-}
-
-const _cronPresets = [
-  CronPreset(
-    name: 'Morning brief',
-    schedule: '0 7 * * *',
-    message: 'Summarize overnight updates.',
-  ),
-  CronPreset(
-    name: 'Nightly summary',
-    schedule: '0 22 * * *',
-    message: 'Summarize today\'s activity and pending tasks.',
-  ),
-  CronPreset(
-    name: 'Hourly check',
-    schedule: '0 * * * *',
-    message: 'Quick status check.',
-  ),
-  CronPreset(
-    name: 'Weekly report',
-    schedule: '0 9 * * 1',
-    message: 'Weekly progress report.',
-  ),
-  CronPreset(
-    name: 'Quick reminder (20m)',
-    schedule: '+20m',
-    message: 'Reminder: ...',
-    session: 'main',
-    deleteAfterRun: true,
-  ),
-  CronPreset(
-    name: 'Twice daily digest',
-    schedule: '0 9,18 * * *',
-    message: 'Digest: summarize new messages and tasks.',
-  ),
-];
+enum CronCategory { existing, templates }
 
 class AutomationsDialog extends ConsumerStatefulWidget {
   final AutomationTab initialTab;
@@ -191,7 +137,7 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
       // single WebSocket connection. The command queue in the client
       // also serializes, but sequential awaits are clearest.
       final cronRaw = await client.executeCommandForOutput(
-        'cron list --json', timeout: const Duration(seconds: 30),
+        'cron list --all --json', timeout: const Duration(seconds: 30),
       ).catchError((_) => '{}');
       final hooksRaw = await client.executeCommandForOutput(
         'hooks list --json', timeout: const Duration(seconds: 30),
@@ -252,8 +198,6 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
         return _cronJobs.where((j) => !_isCronTemplate(j)).toList();
       case CronCategory.templates:
         return _cronJobs.where(_isCronTemplate).toList();
-      case CronCategory.presets:
-        return const [];
     }
   }
 
@@ -347,15 +291,22 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
     _cronScheduleCtrl.text = _effectiveSchedule();
   }
 
-  void _prefillFromPreset(CronPreset preset) {
-    final parsed = tryParseSimple(preset.schedule);
+  /// Pre-fill the add-cron form from a template job's data.
+  void _prefillFromTemplate(Map<String, dynamic> job) {
+    final name = (job['name'] ?? '').toString();
+    final schedule = (job['schedule'] ?? '').toString();
+    final command = (job['command'] ?? job['message'] ?? '').toString();
+    final session = (job['sessionTarget'] ?? job['session'] ?? 'isolated').toString();
+    final deleteAfterRun = job['deleteAfterRun'] == true;
+    final parsed = tryParseSimple(schedule);
     setState(() {
       _showAddCronForm = true;
-      _cronNameCtrl.text = preset.name;
-      _cronScheduleCtrl.text = preset.schedule;
-      _cronMessageCtrl.text = preset.message;
-      _cronSession = preset.session;
-      _cronDeleteAfterRun = preset.deleteAfterRun;
+      _cronCategory = CronCategory.existing; // Switch to existing tab to show form
+      _cronNameCtrl.text = name;
+      _cronScheduleCtrl.text = schedule;
+      _cronMessageCtrl.text = command;
+      _cronSession = session == 'main' ? 'main' : 'isolated';
+      _cronDeleteAfterRun = deleteAfterRun;
       if (parsed != null) {
         _simpleMode = true;
         _frequency = parsed.frequency;
@@ -608,15 +559,9 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
     final theme = Theme.of(context);
 
     final cronCategoryRows = _cronsForCategory();
-    final cronPages = _cronCategory == CronCategory.presets
-        ? 1
-        : (cronCategoryRows.length / _pageSize).ceil().clamp(1, 9999);
-    final cronPageRows = _cronCategory == CronCategory.presets
-        ? const <Map<String, dynamic>>[]
-        : _slicePage(cronCategoryRows, _cronPage);
-    final totalRows = _cronCategory == CronCategory.presets
-        ? _cronPresets.length
-        : cronCategoryRows.length;
+    final cronPages = (cronCategoryRows.length / _pageSize).ceil().clamp(1, 9999);
+    final cronPageRows = _slicePage(cronCategoryRows, _cronPage);
+    final totalRows = cronCategoryRows.length;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -641,26 +586,20 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
               _categoryToggle('templates', _cronCategory == CronCategory.templates, () {
                 setState(() { _cronCategory = CronCategory.templates; _cronPage = 0; _showAddCronForm = false; });
               }),
-              const SizedBox(width: 10),
-              _categoryToggle('presets', _cronCategory == CronCategory.presets, () {
-                setState(() { _cronCategory = CronCategory.presets; _cronPage = 0; _showAddCronForm = false; });
-              }),
               const Spacer(),
-              if (_cronCategory != CronCategory.presets) ...[
-                Text(
-                  '${_cronPage + 1}/$cronPages',
-                  style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary),
-                ),
-                const SizedBox(width: 10),
-                _pageControl('prev', _cronPage > 0, () {
-                  setState(() => _cronPage -= 1);
-                }),
-                const SizedBox(width: 8),
-                _pageControl('next', _cronPage + 1 < cronPages, () {
-                  setState(() => _cronPage += 1);
-                }),
-                const SizedBox(width: 12),
-              ],
+              Text(
+                '${_cronPage + 1}/$cronPages',
+                style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary),
+              ),
+              const SizedBox(width: 10),
+              _pageControl('prev', _cronPage > 0, () {
+                setState(() => _cronPage -= 1);
+              }),
+              const SizedBox(width: 8),
+              _pageControl('next', _cronPage + 1 < cronPages, () {
+                setState(() => _cronPage += 1);
+              }),
+              const SizedBox(width: 12),
               GestureDetector(
                 onTap: () => setState(() => _showAddCronForm = !_showAddCronForm),
                 child: Text(
@@ -675,22 +614,20 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
         if (_showAddCronForm) _buildAddCronForm(),
         // Content
         Expanded(
-          child: _cronCategory == CronCategory.presets
-              ? _buildPresetsView()
-              : totalRows == 0
-                  ? Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Text(
-                        _cronCategory == CronCategory.templates
-                            ? 'no cron templates'
-                            : 'no cron jobs configured',
-                        style: theme.textTheme.bodyMedium?.copyWith(color: t.fgPlaceholder),
-                      ),
-                    )
-                  : ListView(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      children: cronPageRows.map(_cronRow).toList(),
-                    ),
+          child: totalRows == 0
+              ? Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Text(
+                    _cronCategory == CronCategory.templates
+                        ? 'no cron templates'
+                        : 'no cron jobs configured',
+                    style: theme.textTheme.bodyMedium?.copyWith(color: t.fgPlaceholder),
+                  ),
+                )
+              : ListView(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  children: cronPageRows.map(_cronRow).toList(),
+                ),
         ),
       ],
     );
@@ -1096,62 +1033,6 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
     );
   }
 
-  Widget _buildPresetsView() {
-    final t = ShellTokens.of(context);
-    final theme = Theme.of(context);
-
-    return ListView(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      children: _cronPresets.map((preset) {
-        final humanDesc = describeCron(preset.schedule);
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      preset.name,
-                      style: theme.textTheme.bodyMedium?.copyWith(color: t.fgPrimary),
-                    ),
-                  ),
-                  Text(
-                    humanDesc,
-                    style: theme.textTheme.labelSmall?.copyWith(color: t.accentPrimary),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    preset.schedule,
-                    style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary, fontSize: 10),
-                  ),
-                  const SizedBox(width: 12),
-                  GestureDetector(
-                    onTap: () => _prefillFromPreset(preset),
-                    child: Text(
-                      'add',
-                      style: theme.textTheme.labelSmall?.copyWith(color: t.accentPrimary),
-                    ),
-                  ),
-                ],
-              ),
-              Padding(
-                padding: const EdgeInsets.only(left: 14),
-                child: Text(
-                  '${preset.message}  (${preset.session == 'main' ? 'main chat' : 'new session'})',
-                  style: theme.textTheme.bodyMedium?.copyWith(color: t.fgTertiary, fontSize: 12),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-        );
-      }).toList(),
-    );
-  }
-
   Widget _cronRow(Map<String, dynamic> row) {
     final t = ShellTokens.of(context);
     final theme = Theme.of(context);
@@ -1164,6 +1045,7 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
     final sessionTarget = (row['sessionTarget'] ?? '').toString();
     final displayName = name.isNotEmpty ? name : id;
     final humanDesc = describeCron(schedule);
+    final isTemplate = _isCronTemplate(row);
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
@@ -1197,6 +1079,18 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
                 Text(
                   sessionTarget == 'main' ? 'main chat' : sessionTarget == 'isolated' ? 'new session' : sessionTarget,
                   style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary),
+                ),
+              ],
+              if (isTemplate) ...[
+                const SizedBox(width: 12),
+                GestureDetector(
+                  onTap: () => _prefillFromTemplate(row),
+                  child: Text(
+                    'use',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: t.accentSecondary,
+                    ),
+                  ),
                 ),
               ],
               const SizedBox(width: 12),

@@ -1,5 +1,7 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const { ensureRole } = require('./rbac');
 const { verifyToken, resolveRole } = require('./middleware');
 const authRoutes = require('./routes/auth');
@@ -8,15 +10,60 @@ const usersRoutes = require('./routes/users');
 const app = express();
 const PORT = parseInt(process.env.AUTH_SERVICE_PORT || '18791');
 
-app.use(cors());
+// Security: helmet for standard security headers
+app.use(helmet());
+
+// Security: CORS with origin restriction
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (server-to-server, curl, etc.)
+    if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS: origin ${origin} not allowed`));
+    }
+  },
+  credentials: true,
+}));
+
 app.use(express.json());
 
-// Health check (no auth)
-app.get('/auth/health', (req, res) => {
-  res.json({ status: 'ok', service: 'trinity-auth' });
+// Rate limiting on auth endpoints
+const authLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 10,
+  message: { error: 'Too many auth requests, try again later' },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
-// Auth middleware for all /auth/* routes (except health)
+const guestLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  message: { error: 'Too many guest token requests, try again later' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Health check (no auth, no rate limit)
+app.get('/auth/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'trinity-auth',
+    uptime: Math.floor(process.uptime()),
+    version: process.env.npm_package_version || '1.0.0',
+  });
+});
+
+// Rate limit guest endpoint specifically
+app.post('/auth/guest', guestLimiter);
+
+// Auth middleware for all /auth/* routes (except health and guest)
 app.use('/auth', verifyToken, resolveRole);
 
 // Routes
@@ -24,12 +71,18 @@ app.use('/auth', authRoutes);
 app.use('/auth/users', usersRoutes);
 
 async function ensureDefaultSuperadmin() {
-  const enabled = (process.env.ENABLE_DEFAULT_SUPERADMIN || 'true') === 'true';
+  const enabled = (process.env.ENABLE_DEFAULT_SUPERADMIN || 'false') === 'true';
   if (!enabled) return;
 
   const rawEmail = process.env.DEFAULT_SUPERADMIN_EMAIL || 'admin@trinity.local';
   const email = rawEmail.includes('@') ? rawEmail : `${rawEmail}@trinity.local`;
-  const password = process.env.DEFAULT_SUPERADMIN_PASSWORD || 'admin';
+  const password = process.env.DEFAULT_SUPERADMIN_PASSWORD;
+
+  if (!password || password === 'admin' || password.length < 8) {
+    console.error('[auth-service] DEFAULT_SUPERADMIN_PASSWORD must be set to a value >= 8 chars (not "admin"). Skipping superadmin bootstrap.');
+    return;
+  }
+
   const gotrueUrl = process.env.SUPABASE_AUTH_URL || 'http://supabase-auth:9999';
   const anonKey = process.env.SUPABASE_ANON_KEY || '';
   

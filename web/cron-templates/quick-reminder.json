@@ -1,0 +1,9 @@
+{
+  "name": "Quick Reminder (20m)",
+  "description": "One-shot reminder that fires in 20 minutes and auto-deletes",
+  "schedule": "+20m",
+  "command": "Reminder: check on the task I was working on.",
+  "session": "main",
+  "enabled": false,
+  "deleteAfterRun": true
+}

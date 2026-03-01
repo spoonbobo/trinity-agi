@@ -1,0 +1,8 @@
+{
+  "name": "Twice Daily Digest",
+  "description": "Summarize new messages and tasks at 9am and 6pm",
+  "schedule": "0 9,18 * * *",
+  "command": "Digest: summarize new messages, pending tasks, and any important updates since the last digest.",
+  "session": "isolated",
+  "enabled": false
+}

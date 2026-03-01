@@ -1,0 +1,58 @@
+# Production overrides for Trinity AGI
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Prerequisites:
+# - All secrets MUST be set in .env (no defaults, compose will fail otherwise)
+# - TLS certificates mounted at /etc/nginx/ssl/
+# - Vault must be initialized with real storage backend (not dev mode)
+
+services:
+  # ─── nginx: TLS + HSTS ──────────────────────────────────────────────────
+  nginx:
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - flutter-build:/usr/share/nginx/html:ro
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  # ─── Vault: production mode ─────────────────────────────────────────────
+  vault:
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ""  # Disable dev mode
+      VAULT_UI: "false"
+    volumes:
+      - vault-data:/vault/data
+      - ./vault/config.hcl:/vault/config/config.hcl:ro
+    command: ["server"]
+
+  # ─── Supabase DB: tighter resource limits ───────────────────────────────
+  supabase-db:
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # ─── Keycloak: production mode ──────────────────────────────────────────
+  keycloak:
+    command: ["start", "--import-realm", "--hostname-strict=false"]
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ─── OpenClaw: production ───────────────────────────────────────────────
+  openclaw-gateway:
+    command: ["openclaw", "gateway", "--port", "18789", "--bind", "lan"]
+    environment:
+      - NODE_ENV=production
+
+  # ─── Disable default superadmin in production ───────────────────────────
+  auth-service:
+    environment:
+      ENABLE_DEFAULT_SUPERADMIN: "false"

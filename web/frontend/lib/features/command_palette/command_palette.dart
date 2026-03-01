@@ -25,14 +25,6 @@ class CommandPalette extends StatefulWidget {
 
   @override
   State<CommandPalette> createState() => _CommandPaletteState();
-
-  static void show(BuildContext context, List<CommandItem> commands) {
-    showDialog(
-      context: context,
-      barrierColor: Colors.black54,
-      builder: (context) => CommandPalette(commands: commands),
-    );
-  }
 }
 
 class _CommandPaletteState extends State<CommandPalette> {

@@ -27,11 +27,16 @@ class TerminalProxyClient extends ChangeNotifier {
   final GatewayAuth auth;
   String _role;
 
+  static const int _maxOutputs = 10000;
+
   WebSocketChannel? _channel;
   TerminalConnectionState _state = TerminalConnectionState.disconnected;
   final List<TerminalOutput> _outputs = [];
   bool _isAuthenticated = false;
   bool _isExecuting = false;
+  bool _disposed = false;
+  int _reconnectAttempts = 0;
+  Timer? _reconnectTimer;
 
   /// Completer that resolves when auth succeeds (or fails/times out).
   Completer<void>? _authCompleter;
@@ -75,6 +80,7 @@ class TerminalProxyClient extends ChangeNotifier {
 
     try {
       _channel = WebSocketChannel.connect(Uri.parse(url));
+      await _channel!.ready; // Wait for WebSocket handshake to complete
 
       _channel!.stream.listen(
         _onMessage,
@@ -82,8 +88,6 @@ class TerminalProxyClient extends ChangeNotifier {
         onDone: _onDone,
       );
 
-      // Small delay for the WebSocket handshake to finish, then send auth.
-      await Future.delayed(const Duration(milliseconds: 100));
       _authenticate();
 
       // Wait for the auth response (resolved in _onMessage 'auth' case).
@@ -113,6 +117,14 @@ class TerminalProxyClient extends ChangeNotifier {
     }));
   }
 
+  void _addOutput(TerminalOutput output) {
+    _outputs.add(output);
+    // Evict oldest entries if over capacity
+    if (_outputs.length > _maxOutputs) {
+      _outputs.removeRange(0, _outputs.length - _maxOutputs);
+    }
+  }
+
   void _onMessage(dynamic raw) {
     try {
       final data = jsonDecode(raw as String);
@@ -123,6 +135,8 @@ class TerminalProxyClient extends ChangeNotifier {
           _isAuthenticated = data['status'] == 'ok';
           if (_isAuthenticated) {
             _state = TerminalConnectionState.connected;
+            _reconnectAttempts = 0;
+            _reconnectTimer?.cancel();
             if (_authCompleter != null && !_authCompleter!.isCompleted) {
               _authCompleter!.complete();
             }
@@ -138,7 +152,7 @@ class TerminalProxyClient extends ChangeNotifier {
           break;
 
         case 'stdout':
-          _outputs.add(TerminalOutput(
+          _addOutput(TerminalOutput(
             type: 'stdout',
             data: data['data'] as String,
           ));
@@ -146,7 +160,7 @@ class TerminalProxyClient extends ChangeNotifier {
           break;
 
         case 'stderr':
-          _outputs.add(TerminalOutput(
+          _addOutput(TerminalOutput(
             type: 'stderr',
             data: data['data'] as String,
           ));
@@ -154,7 +168,7 @@ class TerminalProxyClient extends ChangeNotifier {
           break;
 
         case 'system':
-          _outputs.add(TerminalOutput(
+          _addOutput(TerminalOutput(
             type: 'system',
             message: data['message'] as String,
           ));
@@ -163,7 +177,7 @@ class TerminalProxyClient extends ChangeNotifier {
 
         case 'error':
           _isExecuting = false;
-          _outputs.add(TerminalOutput(
+          _addOutput(TerminalOutput(
             type: 'error',
             message: data['message'] as String,
           ));
@@ -172,7 +186,7 @@ class TerminalProxyClient extends ChangeNotifier {
 
         case 'exit':
           _isExecuting = false;
-          _outputs.add(TerminalOutput(
+          _addOutput(TerminalOutput(
             type: 'exit',
             exitCode: data['code'] as int?,
             message: data['message'] as String?,
@@ -185,7 +199,7 @@ class TerminalProxyClient extends ChangeNotifier {
           break;
       }
     } catch (e) {
-      debugPrint('[Terminal] Error parsing message: $e');
+      if (kDebugMode) debugPrint('[Terminal] Error parsing message: $e');
     }
   }
 
@@ -210,6 +224,27 @@ class TerminalProxyClient extends ChangeNotifier {
       );
     }
     notifyListeners();
+    _scheduleReconnect();
+  }
+
+  /// Auto-reconnect with exponential backoff (mirrors GatewayClient pattern)
+  void _scheduleReconnect() {
+    if (_disposed) return;
+    _reconnectAttempts++;
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s max
+    final delay = Duration(
+        seconds: (_reconnectAttempts <= 5)
+            ? (1 << (_reconnectAttempts - 1))
+            : 30);
+    if (kDebugMode) debugPrint('[Terminal] reconnecting in ${delay.inSeconds}s (attempt $_reconnectAttempts)');
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(delay, () {
+      if (!_disposed &&
+          _state != TerminalConnectionState.connected &&
+          _state != TerminalConnectionState.connecting) {
+        connect().catchError((_) {});
+      }
+    });
   }
 
   void executeCommand(String command) {
@@ -342,6 +377,8 @@ class TerminalProxyClient extends ChangeNotifier {
   }
 
   void disconnect() {
+    _reconnectTimer?.cancel();
+    _reconnectAttempts = 0;
     _channel?.sink.close();
     _state = TerminalConnectionState.disconnected;
     _isAuthenticated = false;
@@ -357,6 +394,7 @@ class TerminalProxyClient extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     disconnect();
     super.dispose();
   }

@@ -1,5 +1,20 @@
 FROM node:22-bookworm
 
+# Document processing utilities (PDF, DOCX, images, etc.)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    poppler-utils \
+    pandoc \
+    python3 python3-pip python3-venv \
+    imagemagick \
+    tesseract-ocr \
+    libreoffice-writer-nogui \
+    && python3 -m venv /opt/doctools \
+    && /opt/doctools/bin/pip install --no-cache-dir \
+       pdfplumber PyPDF2 python-docx Pillow pytesseract \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/opt/doctools/bin:$PATH"
+
 RUN corepack enable && npm install -g openclaw@latest clawhub@latest
 
 RUN mkdir -p /home/node/.openclaw/extensions/canvas-bridge && chown -R node:node /home/node/.openclaw

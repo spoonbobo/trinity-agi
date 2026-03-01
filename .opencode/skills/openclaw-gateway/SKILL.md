@@ -48,12 +48,45 @@ docker exec trinity-openclaw openclaw doctor              # diagnose config issu
 docker exec trinity-openclaw openclaw doctor --fix        # auto-fix config issues
 docker exec trinity-openclaw openclaw models              # list available models
 docker exec -it trinity-openclaw bash         # interactive config - openclow configure
-docker exec trinity-openclaw openclaw sessions list       # list sessions
+docker exec trinity-openclaw openclaw sessions              # list sessions (NO subcommand)
+docker exec trinity-openclaw openclaw sessions --json       # list sessions as JSON
+docker exec trinity-openclaw openclaw sessions --all-agents # list all agents' sessions
 docker exec trinity-openclaw openclaw logs --tail 50      # recent logs
 docker exec -it trinity-openclaw openclaw channels login # login
 ```
 
 The gateway token is stored in `web/.env` as `OPENCLAW_GATEWAY_TOKEN`.
+
+## openclaw-exec Tool (OpenCode MCP)
+
+OpenCode provides a built-in `openclaw-exec` tool that runs CLI commands inside the `trinity-openclaw` Docker container. Use it instead of `docker exec` when working in OpenCode.
+
+**Syntax:** The tool takes a single `command` string -- this is the CLI command WITHOUT the `openclaw` prefix. The tool automatically runs `docker exec trinity-openclaw openclaw <command>`.
+
+```
+openclaw-exec("status")              # runs: openclaw status
+openclaw-exec("models")              # runs: openclaw models
+openclaw-exec("sessions")            # runs: openclaw sessions
+openclaw-exec("sessions --json")     # runs: openclaw sessions --json
+openclaw-exec("doctor --fix")        # runs: openclaw doctor --fix
+openclaw-exec("logs --tail 50")      # runs: openclaw logs --tail 50
+```
+
+**Common mistakes that cause ShellError (exit code 1):**
+
+| Wrong | Right | Why |
+|-------|-------|-----|
+| `sessions list` | `sessions` | `sessions` has no `list` subcommand; it IS the list command |
+| `sessions inspect <key>` | `sessions --json` | No `inspect` subcommand; use `--json` for details |
+| `models default <m>` | `models set <m>` | No `default` subcommand |
+| `models --list` | `models list` | Flag syntax wrong; `list` is a subcommand |
+
+**Commands that require TTY (`-it` flag) will fail** in `openclaw-exec` because it runs non-interactively:
+- `configure` (interactive prompts)
+- `channels login` (QR code display)
+- `models auth login` (device flow)
+
+For these, use `docker exec -it trinity-openclaw openclaw <command>` via the Bash tool instead.
 
 ## Models CLI Reference
 

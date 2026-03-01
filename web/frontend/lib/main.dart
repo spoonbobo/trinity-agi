@@ -1,9 +1,12 @@
+import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/theme.dart';
 import 'core/i18n.dart';
 import 'core/providers.dart';
+import 'core/dialog_service.dart';
 import 'features/shell/shell_page.dart';
 import 'features/auth/auth_guard.dart';
 
@@ -14,7 +17,49 @@ final fontFamilyProvider = StateProvider<AppFontFamily>((ref) => loadAppFontFami
 final languageProvider = StateProvider<AppLanguage>((ref) => loadAppLanguage());
 
 void main() {
-  runApp(const ProviderScope(child: TrinityApp()));
+  // Production error boundary: catch uncaught widget build errors
+  FlutterError.onError = (FlutterErrorDetails details) {
+    FlutterError.presentError(details);
+    if (kReleaseMode) {
+      // In release mode, log to console instead of crashing
+      // ignore: avoid_print
+      print('[Trinity] FlutterError: ${details.exceptionAsString()}');
+    }
+  };
+
+  // Custom error widget for production (replaces red error screen)
+  if (kReleaseMode) {
+    ErrorWidget.builder = (FlutterErrorDetails details) {
+      return Container(
+        alignment: Alignment.center,
+        padding: const EdgeInsets.all(16),
+        child: const Text(
+          'Something went wrong.',
+          style: TextStyle(color: Color(0xFF999999), fontSize: 12),
+          textAlign: TextAlign.center,
+        ),
+      );
+    };
+  }
+
+  DialogService.instance.reset(); // Clear stale IDs on hot-restart
+
+  // Catch async errors that escape the Flutter framework
+  runZonedGuarded(
+    () {
+      runApp(const ProviderScope(child: TrinityApp()));
+    },
+    (error, stackTrace) {
+      if (kReleaseMode) {
+        // ignore: avoid_print
+        print('[Trinity] Unhandled async error: $error');
+      } else {
+        // In debug mode, rethrow so developers see it
+        // ignore: avoid_print
+        print('[Trinity] Unhandled async error: $error\n$stackTrace');
+      }
+    },
+  );
 }
 
 class TrinityApp extends ConsumerWidget {

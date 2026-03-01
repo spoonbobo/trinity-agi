@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kDebugMode, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
@@ -79,7 +80,9 @@ class _SessionDrawerState extends ConsumerState<SessionDrawer> {
           if (mounted) setState(() => _sessionKeys = keys);
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      if (kDebugMode) debugPrint('[Sessions] Failed to fetch sessions: $e');
+    }
     if (mounted) setState(() => _loading = false);
   }
 
@@ -109,6 +112,9 @@ class _SessionDrawerState extends ConsumerState<SessionDrawer> {
       ref.read(activeSessionProvider.notifier).state = 'main';
       widget.onSessionChanged();
     }
+    // Notify the gateway so the session is actually removed server-side.
+    final client = ref.read(gatewayClientProvider);
+    client.deleteSession(key).catchError((_) {});
   }
 
   @override

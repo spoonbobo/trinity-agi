@@ -21,6 +21,7 @@ import '../admin/admin_dialog.dart';
 import '../sessions/session_drawer.dart';
 import '../command_palette/command_palette.dart';
 import '../notifications/notification_center.dart';
+import '../../core/dialog_service.dart';
 
 const _canvasSplitKey = 'trinity_canvas_split';
 const _defaultCanvasFlex = 4.0;
@@ -42,8 +43,13 @@ class _ShellPageState extends ConsumerState<ShellPage> {
   bool _showGovernance = false;
   bool _showSessionDrawer = false;
   bool _showNotifications = false;
+  bool _draggingOver = false;
   StreamSubscription<WsEvent>? _approvalSub;
   StreamSubscription<WsEvent>? _notifSub;
+  StreamSubscription? _dragEnterSub;
+  StreamSubscription? _dragOverSub;
+  StreamSubscription? _dragLeaveSub;
+  StreamSubscription? _dropSub;
   double _canvasFlex = _defaultCanvasFlex;
   bool _dividerHovered = false;
   // Mobile: which panel is visible (0=chat, 1=canvas)
@@ -62,6 +68,30 @@ class _ShellPageState extends ConsumerState<ShellPage> {
     }
     // Register global Ctrl+K handler so it works even when prompt bar has focus
     HardwareKeyboard.instance.addHandler(_globalKeyHandler);
+    // Register drag-and-drop on the document body
+    _dragEnterSub = html.document.body?.onDragEnter.listen((e) {
+      e.preventDefault();
+      if (mounted && !_draggingOver) setState(() => _draggingOver = true);
+    });
+    _dragOverSub = html.document.body?.onDragOver.listen((e) {
+      e.preventDefault(); // Required to allow drop
+    });
+    _dragLeaveSub = html.document.body?.onDragLeave.listen((e) {
+      // Only dismiss when leaving the document body (not child elements)
+      if (e.relatedTarget == null && mounted) {
+        setState(() => _draggingOver = false);
+      }
+    });
+    _dropSub = html.document.body?.onDrop.listen((e) {
+      e.preventDefault();
+      if (mounted) setState(() => _draggingOver = false);
+      final files = e.dataTransfer.files;
+      if (files == null || files.isEmpty) return;
+      final promptBarState = PromptBar.globalKey.currentState;
+      if (promptBarState != null) {
+        promptBarState.addDroppedFiles(List<html.File>.from(files));
+      }
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final client = ref.read(gatewayClientProvider);
       client.connect().catchError((e) {
@@ -85,6 +115,10 @@ class _ShellPageState extends ConsumerState<ShellPage> {
     HardwareKeyboard.instance.removeHandler(_globalKeyHandler);
     _approvalSub?.cancel();
     _notifSub?.cancel();
+    _dragEnterSub?.cancel();
+    _dragOverSub?.cancel();
+    _dragLeaveSub?.cancel();
+    _dropSub?.cancel();
     super.dispose();
   }
 
@@ -99,29 +133,31 @@ class _ShellPageState extends ConsumerState<ShellPage> {
     return false;
   }
 
+  final _dialogs = DialogService.instance;
+
   void _showSkillsDialog() {
-    showDialog(context: context, barrierDismissible: true,
-      builder: (context) => const SkillsDialog());
+    _dialogs.showUnique(context: context, id: 'skills',
+      builder: (_) => const SkillsDialog());
   }
 
   void _showMemoryDialog() {
-    showDialog(context: context, barrierDismissible: true,
-      builder: (context) => const MemoryDialog());
+    _dialogs.showUnique(context: context, id: 'memory',
+      builder: (_) => const MemoryDialog());
   }
 
   void _showAutomationsDialog() {
-    showDialog(context: context, barrierDismissible: true,
-      builder: (context) => const AutomationsDialog());
+    _dialogs.showUnique(context: context, id: 'automations',
+      builder: (_) => const AutomationsDialog());
   }
 
   void _showSettingsDialog() {
-    showDialog(context: context, barrierDismissible: true,
-      builder: (context) => const SettingsDialog());
+    _dialogs.showUnique(context: context, id: 'settings',
+      builder: (_) => const SettingsDialog());
   }
 
   void _showAdminDialog() {
-    showDialog(context: context, barrierDismissible: true,
-      builder: (context) => const AdminDialog());
+    _dialogs.showUnique(context: context, id: 'admin',
+      builder: (_) => const AdminDialog());
   }
 
   void _toggleSessionDrawer() {
@@ -206,7 +242,12 @@ class _ShellPageState extends ConsumerState<ShellPage> {
       ),
     ];
 
-    CommandPalette.show(context, commands);
+    _dialogs.showUnique(
+      context: context,
+      id: 'command-palette',
+      barrierColor: Colors.black54,
+      builder: (_) => CommandPalette(commands: commands),
+    );
   }
 
   @override
@@ -313,6 +354,7 @@ class _ShellPageState extends ConsumerState<ShellPage> {
                   ),
                 ),
                 PromptBar(
+                  key: PromptBar.globalKey,
                   enabled: isConnected &&
                       ref.read(authClientProvider).state.hasPermission('chat.send'),
                 ),
@@ -342,6 +384,20 @@ class _ShellPageState extends ConsumerState<ShellPage> {
                 ),
               ),
             ],
+            // Drag-and-drop border indicator (non-destructive overlay)
+            if (_draggingOver)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      border: Border.all(
+                        color: t.accentPrimary.withOpacity(0.5),
+                        width: 2,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
           ],
         ),
     );
@@ -447,20 +503,19 @@ class _ShellPageState extends ConsumerState<ShellPage> {
             ),
           ),
           const SizedBox(width: 6),
-          // Active session indicator
-          if (activeSession != 'main')
-            Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                decoration: BoxDecoration(
-                  border: Border.all(color: t.border, width: 0.5),
-                ),
-                child: Text(activeSession,
-                  style: TextStyle(fontSize: 8, color: t.accentPrimary),
-                  overflow: TextOverflow.ellipsis),
+          // Active session indicator (always visible)
+          Padding(
+            padding: const EdgeInsets.only(right: 6),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+              decoration: BoxDecoration(
+                border: Border.all(color: t.border, width: 0.5),
               ),
+              child: Text(activeSession,
+                style: TextStyle(fontSize: 8, color: t.accentPrimary),
+                overflow: TextOverflow.ellipsis),
             ),
+          ),
           if (!isMobile) ...[
             _HoverLabel(text: tr(language, 'memory'), style: labelStyle!, onTap: _showMemoryDialog),
           ],

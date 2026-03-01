@@ -33,7 +33,7 @@ seed_dir_if_empty() {
 seed_dir_if_empty "$SEED_ROOT/skills" "$OPENCLAW_HOME/skills"
 seed_dir_if_empty "$SEED_ROOT/cron-templates" "$OPENCLAW_HOME/cron-templates"
 
-mkdir -p "$OPENCLAW_HOME/workspace"
+mkdir -p "$OPENCLAW_HOME/workspace" "$OPENCLAW_HOME/workspace/memory"
 if [ ! -f "$OPENCLAW_HOME/workspace/MEMORY.md" ] && [ -f "$SEED_ROOT/workspace/MEMORY.md" ]; then
   cp -a "$SEED_ROOT/workspace/MEMORY.md" "$OPENCLAW_HOME/workspace/MEMORY.md"
   echo "[bootstrap] Seeded $OPENCLAW_HOME/workspace/MEMORY.md"

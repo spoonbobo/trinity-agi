@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'auth.dart';
+import 'protocol.dart';
 import '../models/ws_frame.dart';
 
 enum ConnectionState { disconnected, connecting, connected, error }
@@ -71,13 +72,11 @@ class GatewayClient extends ChangeNotifier {
   void _onMessage(dynamic raw) {
     try {
       final rawStr = raw as String;
-      debugPrint('[GW] raw: ${rawStr.length > 300 ? rawStr.substring(0, 300) : rawStr}');
       final frame = WsFrame.parse(rawStr);
 
       switch (frame.type) {
         case FrameType.event:
           final event = frame.event!;
-          debugPrint('[GW] event: ${event.event}');
           if (event.event == 'connect.challenge') {
             _handleChallenge(event);
           } else if (_isHandledEvent(event.event)) {
@@ -86,7 +85,6 @@ class GatewayClient extends ChangeNotifier {
           break;
         case FrameType.res:
           final response = frame.response!;
-          debugPrint('[GW] res: id=${response.id} ok=${response.ok}');
           final completer = _responseCompleters.remove(response.id);
           if (completer != null) {
             completer.complete(response);
@@ -103,7 +101,7 @@ class GatewayClient extends ChangeNotifier {
           break;
       }
     } catch (e, st) {
-      debugPrint('[GW] error processing message: $e\n$st');
+      if (kDebugMode) debugPrint('[GW] error processing message: $e\n$st');
     }
   }
 
@@ -124,7 +122,7 @@ class GatewayClient extends ChangeNotifier {
       },
       'role': 'operator',
       'scopes': ['operator.read', 'operator.write', 'operator.approvals'],
-      'caps': [],
+      'caps': ['tool-events'],
       'commands': [],
       'permissions': {},
       'locale': 'en-US',
@@ -132,7 +130,7 @@ class GatewayClient extends ChangeNotifier {
       ...auth.toConnectParams(nonce),
     };
 
-    sendRequest('connect', params);
+    sendRequest(GatewayMethods.connect, params);
   }
 
   /// Send a typed request and return a future that resolves with the response.
@@ -167,7 +165,7 @@ class GatewayClient extends ChangeNotifier {
         payload: {'type': 'message', 'role': 'user', 'content': message},
       ));
     }
-    return sendRequest('chat.send', {
+    return sendRequest(GatewayMethods.chatSend, {
       'message': message,
       'sessionKey': sessionKey,
       'idempotencyKey': _uuid.v4(),
@@ -179,7 +177,7 @@ class GatewayClient extends ChangeNotifier {
     String sessionKey = 'main',
     int limit = 50,
   }) {
-    return sendRequest('chat.history', {
+    return sendRequest(GatewayMethods.chatHistory, {
       'sessionKey': sessionKey,
       'limit': limit,
     });
@@ -187,14 +185,14 @@ class GatewayClient extends ChangeNotifier {
 
   /// Abort an in-progress agent run.
   Future<WsResponse> abortChat({String sessionKey = 'main'}) {
-    return sendRequest('chat.abort', {
+    return sendRequest(GatewayMethods.chatAbort, {
       'sessionKey': sessionKey,
     });
   }
 
   /// Resolve an exec approval request.
   Future<WsResponse> resolveApproval(String requestId, bool approve) {
-    return sendRequest('exec.approval.resolve', {
+    return sendRequest(GatewayMethods.execApprovalResolve, {
       'requestId': requestId,
       'approved': approve,
     });
@@ -206,10 +204,21 @@ class GatewayClient extends ChangeNotifier {
 
   /// List all sessions from the gateway.
   Future<WsResponse> listSessions() {
-    return sendRequest('sessions.list', {});
+    return sendRequest(GatewayMethods.sessionsList, {});
+  }
+
+  /// Delete a session from the gateway.
+  Future<WsResponse> deleteSession(String key) {
+    return sendRequest(GatewayMethods.sessionsDelete, {'key': key});
   }
 
   /// Send a chat message with optional file attachments.
+  ///
+  /// Attachments use OpenClaw's protocol field names:
+  ///   content  – base64 data
+  ///   mimeType – MIME string
+  ///   fileName – display name (optional)
+  ///   type     – "image" for images (optional)
   Future<WsResponse> sendChatMessageWithAttachments(
     String message, {
     String sessionKey = 'main',
@@ -226,7 +235,7 @@ class GatewayClient extends ChangeNotifier {
         },
       ));
     }
-    return sendRequest('chat.send', {
+    return sendRequest(GatewayMethods.chatSend, {
       'message': message,
       'sessionKey': sessionKey,
       'idempotencyKey': _uuid.v4(),
@@ -255,15 +264,13 @@ class GatewayClient extends ChangeNotifier {
         seconds: (_reconnectAttempts <= 5)
             ? (1 << (_reconnectAttempts - 1))
             : 30);
-    debugPrint('[GW] reconnecting in ${delay.inSeconds}s (attempt $_reconnectAttempts)');
+    if (kDebugMode) debugPrint('[GW] reconnecting in ${delay.inSeconds}s (attempt $_reconnectAttempts)');
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(delay, () {
       if (!_disposed &&
           _state != ConnectionState.connected &&
           _state != ConnectionState.connecting) {
-        connect().catchError((e) {
-          debugPrint('[GW] reconnect failed: $e');
-        });
+        connect().catchError((_) {});
       }
     });
   }

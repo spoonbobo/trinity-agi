@@ -8,7 +8,7 @@ import '../../core/toast_provider.dart';
 import '../../main.dart' show languageProvider;
 import '../../core/providers.dart' show terminalClientProvider;
 
-enum SkillsCategory { ready, notReady, clawhub, templates }
+enum SkillsCategory { ready, clawhub, templates }
 
 class SkillsDialog extends ConsumerStatefulWidget {
   const SkillsDialog({super.key});
@@ -675,8 +675,6 @@ class _SkillsDialogState extends ConsumerState<SkillsDialog> {
     switch (_skillsCategory) {
       case SkillsCategory.ready:
         return _skills.where((s) => s['eligible'] == true && !_isTemplate(s)).toList();
-      case SkillsCategory.notReady:
-        return _skills.where((s) => s['eligible'] != true && !_isTemplate(s)).toList();
       case SkillsCategory.clawhub:
         return _skills.where((s) {
           final name = (s['name'] ?? '').toString().toLowerCase();
@@ -782,13 +780,6 @@ class _SkillsDialogState extends ConsumerState<SkillsDialog> {
               _categoryToggle('ready', _skillsCategory == SkillsCategory.ready, () {
                 setState(() {
                   _skillsCategory = SkillsCategory.ready;
-                  _skillsPage = 0;
-                });
-              }),
-              const SizedBox(width: 10),
-              _categoryToggle('not ready', _skillsCategory == SkillsCategory.notReady, () {
-                setState(() {
-                  _skillsCategory = SkillsCategory.notReady;
                   _skillsPage = 0;
                 });
               }),

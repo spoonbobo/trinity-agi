@@ -5,6 +5,12 @@ const { getPermissionsByTier } = require('./rbac-registry');
 const JWT_SECRET = process.env.JWT_SECRET;
 const GUEST_ROLE = 'guest';
 
+// Validate JWT_SECRET at module load time
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+  console.error('[auth-service] FATAL: JWT_SECRET must be set and >= 32 characters.');
+  process.exit(1);
+}
+
 function log(level, message, meta = {}) {
   const entry = {
     timestamp: new Date().toISOString(),

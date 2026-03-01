@@ -145,8 +145,28 @@ function executeCommand(ws, cmd, token) {
   return child;
 }
 
+const helmet = require('helmet');
+
 const app = express();
-app.use(cors());
+app.use(helmet());
+
+// CORS with origin restriction
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS: origin ${origin} not allowed`));
+    }
+  },
+  credentials: true,
+}));
+
 app.use(express.json());
 
 // Health check endpoint

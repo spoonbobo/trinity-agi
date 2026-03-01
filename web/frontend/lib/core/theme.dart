@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'dart:html' as html;
 
 enum AppFontFamily {
@@ -38,13 +37,19 @@ String appFontFamilyLabel(AppFontFamily family) {
   }
 }
 
-TextTheme applyAppFontToTextTheme(AppFontFamily family, TextTheme base) {
+/// Returns the font family name as declared in pubspec.yaml
+String _fontFamilyName(AppFontFamily family) {
   switch (family) {
     case AppFontFamily.ibmPlexMono:
-      return GoogleFonts.ibmPlexMonoTextTheme(base);
+      return 'IBMPlexMono';
     case AppFontFamily.jetBrainsMono:
-      return GoogleFonts.jetBrainsMonoTextTheme(base);
+      return 'JetBrainsMono';
   }
+}
+
+TextTheme applyAppFontToTextTheme(AppFontFamily family, TextTheme base) {
+  final fontName = _fontFamilyName(family);
+  return base.apply(fontFamily: fontName);
 }
 
 TextStyle appFontStyle(
@@ -53,16 +58,11 @@ TextStyle appFontStyle(
   Color? color,
   double? fontSize,
 }) {
-  final merged = (textStyle ?? const TextStyle()).copyWith(
+  return (textStyle ?? const TextStyle()).copyWith(
+    fontFamily: _fontFamilyName(family),
     color: color ?? textStyle?.color,
     fontSize: fontSize ?? textStyle?.fontSize,
   );
-  switch (family) {
-    case AppFontFamily.ibmPlexMono:
-      return GoogleFonts.ibmPlexMono(textStyle: merged);
-    case AppFontFamily.jetBrainsMono:
-      return GoogleFonts.jetBrainsMono(textStyle: merged);
-  }
 }
 
 // ---------------------------------------------------------------------------

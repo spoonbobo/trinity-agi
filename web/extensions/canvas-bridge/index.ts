@@ -18,6 +18,17 @@ export default function register(api: any) {
       required: ["jsonl"],
     },
     async execute(_id: string, params: { jsonl: string }) {
+      // Defensive validation: reject empty or missing jsonl
+      if (!params.jsonl || typeof params.jsonl !== "string" || params.jsonl.trim().length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Error: the 'jsonl' parameter is required and must contain A2UI v0.8 JSONL lines. Please retry with the full JSONL content as a string in the 'jsonl' parameter.",
+            },
+          ],
+        };
+      }
       latestSurface = params.jsonl;
       return {
         content: [

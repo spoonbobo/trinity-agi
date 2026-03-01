@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -51,12 +53,14 @@ class ChatStreamView extends ConsumerStatefulWidget {
 }
 
 class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
+  static const int _maxEntries = 500;
   final List<ChatEntry> _entries = [];
   final _scrollController = ScrollController();
   StreamSubscription<WsEvent>? _chatSub;
   bool _agentThinking = false;
   bool _showScrollToBottom = false;
   String _currentSession = 'main';
+  bool _historyLoading = false; // Guard against concurrent history fetches
 
   @override
   void initState() {
@@ -83,45 +87,73 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
     _chatSub = client.chatEvents.listen((event) {
       _handleChatEvent(event);
     });
+
+    // If the gateway is already connected (e.g. listener registered after
+    // the hello-ok notification fired), load history immediately.
+    if (client.state == gw.ConnectionState.connected) {
+      _loadHistory();
+    }
   }
 
   void _onClientChange() {
-    // Re-subscribe if reconnected
-    if (ref.read(gatewayClientProvider).state == gw.ConnectionState.connected) {
+    // Re-subscribe if reconnected; guard prevents overlapping fetches.
+    if (!_historyLoading &&
+        ref.read(gatewayClientProvider).state == gw.ConnectionState.connected) {
       _loadHistory();
     }
   }
 
   Future<void> _loadHistory() async {
+    if (_historyLoading) return; // Prevent concurrent fetches
+    _historyLoading = true;
     final client = ref.read(gatewayClientProvider);
     final sessionKey = ref.read(activeSessionProvider);
-    debugPrint('[Chat] _loadHistory sessionKey=$sessionKey');
     try {
       final response = await client.getChatHistory(sessionKey: sessionKey, limit: 50);
-      debugPrint('[Chat] history ok=${response.ok} payload keys=${response.payload?.keys.toList()}');
+      if (!mounted) { _historyLoading = false; return; } // Widget disposed during async gap
       if (response.ok && response.payload != null) {
         // Try 'messages' first, fall back to 'history' or 'entries'
         final messages = response.payload?['messages']
             ?? response.payload?['history']
             ?? response.payload?['entries'];
-        debugPrint('[Chat] messages type=${messages.runtimeType} count=${messages is List ? messages.length : 'N/A'}');
         if (messages is List) {
           setState(() {
             _entries.clear();
             for (final msg in messages) {
               if (msg is! Map<String, dynamic>) continue;
-              var content = msg['content'] as String? ?? '';
+              // Extract displayable text from content (may be String or List of blocks)
+              var content = _extractContent(msg['content']);
               // #10: Replace raw A2UI JSONL in history with friendly message
               if (content.startsWith('__A2UI__')) {
                 content = 'Canvas updated';
               }
+              // Extract timestamp from history (epoch ms or ISO string)
+              DateTime? timestamp;
+              final ts = msg['timestamp'] ?? msg['createdAt'] ?? msg['ts'];
+              if (ts is num) {
+                timestamp = DateTime.fromMillisecondsSinceEpoch(ts.toInt(), isUtc: true);
+              } else if (ts is String) {
+                timestamp = DateTime.tryParse(ts);
+              }
+              // Normalize gateway role names for rendering:
+              // 'toolResult' (gateway camelCase) -> 'tool' (Flutter card)
+              final rawRole = msg['role'] as String? ?? 'system';
+              final role = rawRole == 'toolResult' ? 'tool' : rawRole;
+              // Extract tool name for tool card labels
+              final toolName = msg['toolName'] as String? ??
+                  msg['name'] as String? ??
+                  (role == 'tool' ? 'tool' : null);
+              // Extract image attachments from history content blocks
+              final historyAttachments = _extractImageAttachments(msg['content']);
               _entries.add(ChatEntry(
-                role: msg['role'] as String? ?? 'system',
+                role: role,
                 content: content,
+                toolName: toolName,
+                timestamp: timestamp,
+                attachments: historyAttachments.isNotEmpty ? historyAttachments : null,
               ));
             }
           });
-          debugPrint('[Chat] loaded ${_entries.length} entries');
           // Seed _lastCanvasSurface from history so the poll doesn't
           // re-render stale surfaces from previous runs.
           _seedLastCanvasSurface(messages);
@@ -129,8 +161,102 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
         }
       }
     } catch (e) {
-      debugPrint('[Chat] _loadHistory error: $e');
+      if (kDebugMode) debugPrint('[Chat] _loadHistory error: $e');
+    } finally {
+      _historyLoading = false;
     }
+  }
+
+  /// Extract displayable text from a message content field.
+  /// Handles both flat String content and the List<block> format
+  /// returned by the gateway (e.g. [{type:"text",text:"..."}, ...]).
+  static String _extractContent(dynamic rawContent) {
+    if (rawContent is String) return rawContent;
+    if (rawContent is List) {
+      final textParts = <String>[];
+      for (final block in rawContent) {
+        if (block is! Map<String, dynamic>) continue;
+        final type = block['type'] as String?;
+        if (type == 'text') {
+          final text = block['text'] as String? ?? '';
+          if (text.isNotEmpty) textParts.add(text);
+        }
+        // Skip 'thinking' and 'toolCall' blocks -- not user-visible in history
+      }
+      return textParts.join('\n').trim();
+    }
+    return '';
+  }
+
+  /// Extract image attachments from history content blocks.
+  /// Handles OpenAI-format image_url blocks with data URI base64.
+  static List<Map<String, dynamic>> _extractImageAttachments(dynamic rawContent) {
+    if (rawContent is! List) return const [];
+    final attachments = <Map<String, dynamic>>[];
+    for (final block in rawContent) {
+      if (block is! Map<String, dynamic>) continue;
+      final type = block['type'] as String?;
+      if (type == 'image_url') {
+        final imageUrl = block['image_url'];
+        if (imageUrl is Map<String, dynamic>) {
+          final url = imageUrl['url'] as String? ?? '';
+          // Parse data URI: data:image/jpeg;base64,<data>
+          final match = RegExp(r'^data:(image/[^;]+);base64,(.+)$').firstMatch(url);
+          if (match != null) {
+            attachments.add({
+              'content': match.group(2)!,
+              'mimeType': match.group(1)!,
+              'fileName': 'image',
+              'type': 'image',
+            });
+          }
+        }
+      }
+    }
+    return attachments;
+  }
+
+  /// Extract MEDIA: token paths from tool output and convert to media serving URLs.
+  /// Returns a list of `/__openclaw__/media/<relative>` URLs for image files.
+  static final _mediaTokenExtractRe = RegExp(
+    r'MEDIA:\s*(.+)',
+    caseSensitive: false,
+    multiLine: true,
+  );
+  static const _workspacePrefix = '/home/node/.openclaw/workspace/';
+  static const _imageExts = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.tiff', '.tif'};
+
+  static List<String> _extractMediaUrls(String text) {
+    if (text.isEmpty) return const [];
+    final urls = <String>[];
+    for (final match in _mediaTokenExtractRe.allMatches(text)) {
+      var raw = match.group(1)?.trim() ?? '';
+      // Strip surrounding backticks/quotes
+      while (raw.isNotEmpty && (raw[0] == '`' || raw[0] == '"' || raw[0] == "'")) {
+        raw = raw.substring(1);
+      }
+      while (raw.isNotEmpty && (raw[raw.length - 1] == '`' || raw[raw.length - 1] == '"' || raw[raw.length - 1] == "'")) {
+        raw = raw.substring(0, raw.length - 1);
+      }
+      raw = raw.trim();
+      if (raw.isEmpty) continue;
+      // Check if it's an image file
+      final lower = raw.toLowerCase();
+      final isImage = _imageExts.any((ext) => lower.endsWith(ext));
+      if (!isImage) continue;
+      // Convert absolute workspace path to relative
+      String relative;
+      if (raw.startsWith(_workspacePrefix)) {
+        relative = raw.substring(_workspacePrefix.length);
+      } else if (raw.startsWith('/')) {
+        // Absolute path outside workspace -- skip (security)
+        continue;
+      } else {
+        relative = raw;
+      }
+      urls.add('/__openclaw__/media/$relative');
+    }
+    return urls;
   }
 
   void _seedLastCanvasSurface(List<dynamic> messages) {
@@ -154,11 +280,19 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
     }
   }
 
+  /// Evict oldest entries if we exceed capacity
+  void _capEntries() {
+    if (_entries.length > _maxEntries) {
+      _entries.removeRange(0, _entries.length - _maxEntries);
+    }
+  }
+
   void _handleChatEvent(WsEvent event) {
     try {
       _handleChatEventInner(event);
+      _capEntries();
     } catch (e, st) {
-      debugPrint('[Chat] error handling event: $e\n$st');
+      if (kDebugMode) debugPrint('[Chat] error handling event: $e\n$st');
     }
     // #11: Only auto-scroll if user is near the bottom
     _smartScrollToBottom();
@@ -187,15 +321,21 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
             attachments: attachments,
           ));
         });
-      } else if (state == 'delta' || state == 'final') {
+      } else if (state == 'delta' || state == 'final' || state == 'aborted') {
         final message = payload['message'];
         if (message is! Map<String, dynamic>) return;
         final contentList = message['content'];
         if (contentList is! List || contentList.isEmpty) return;
-        final first = contentList[0];
-        if (first is! Map<String, dynamic>) return;
-        final text = first['text'] as String? ?? '';
-        if (state == 'final') {
+        // Scan for the first 'text' block instead of blindly taking
+        // contentList[0], which may be a 'thinking' block.
+        String text = '';
+        for (final block in contentList) {
+          if (block is Map<String, dynamic> && block['type'] == 'text') {
+            text = block['text'] as String? ?? '';
+            break;
+          }
+        }
+        if (state == 'final' || state == 'aborted') {
           setState(() {
             _agentThinking = false;
             if (_entries.isNotEmpty && _entries.last.role == 'assistant') {
@@ -286,13 +426,24 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
               }
             });
           } else {
+            // Extract MEDIA: tokens from tool result and render as images
+            final mediaImages = _extractMediaUrls(result);
+            final displayResult = result.isNotEmpty ? result : 'Done';
             setState(() {
               if (_entries.isNotEmpty && _entries.last.role == 'tool') {
                 _entries[_entries.length - 1] = _entries.last.copyWith(
-                  content: result.isNotEmpty ? result : 'Done',
+                  content: displayResult,
                   isStreaming: false,
                 );
               }
+              // Add image entries for any MEDIA: tokens found in tool output
+              for (final url in mediaImages) {
+                _entries.add(ChatEntry(
+                  role: 'assistant',
+                  content: '![Generated image]($url)',
+                ));
+              }
+              _capEntries();
             });
           }
         } else {
@@ -342,8 +493,9 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
   Future<void> _pollCanvasSurface() async {
     try {
       final client = ref.read(gatewayClientProvider);
+      final sessionKey = ref.read(activeSessionProvider);
       // Fetch recent history and scan for __A2UI__ in tool results
-      final response = await client.getChatHistory(limit: 10);
+      final response = await client.getChatHistory(sessionKey: sessionKey, limit: 10);
       if (!response.ok || response.payload == null) return;
       final messages = response.payload!['messages'];
       if (messages is! List) return;
@@ -361,7 +513,7 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
           final text = block['text'] as String?;
           if (text != null && text.startsWith('__A2UI__') && text != _lastCanvasSurface) {
             _lastCanvasSurface = text;
-            debugPrint('[Canvas] Found A2UI in history, rendering surface');
+            if (kDebugMode) debugPrint('[Canvas] Found A2UI in history, rendering surface');
             _handleA2UIToolResult(text);
             setState(() {
               if (_entries.isEmpty || _entries.last.role != 'tool' || !_entries.last.isStreaming) {
@@ -384,7 +536,7 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
         }
       }
     } catch (e) {
-      debugPrint('[Canvas] poll error: $e');
+      if (kDebugMode) debugPrint('[Canvas] poll error: $e');
     }
   }
 
@@ -396,7 +548,9 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
       try {
         final parsed = jsonDecode(line.trim()) as Map<String, dynamic>;
         client.emitCanvasEvent(WsEvent(event: 'a2ui', payload: parsed));
-      } catch (_) {}
+      } catch (e) {
+        if (kDebugMode) debugPrint('[A2UI] Failed to parse JSONL line: $e');
+      }
     }
   }
 
@@ -472,7 +626,16 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
     }
 
     // (F) Stack with floating scroll-to-bottom button
-    return Stack(
+    // SizeChangedLayoutNotifier fires when the viewport size changes
+    // (e.g., PromptBar height changes from attachments, multi-line text, voice).
+    // This keeps the chat pinned to the bottom when the user was already there.
+    return NotificationListener<SizeChangedLayoutNotification>(
+      onNotification: (_) {
+        _smartScrollToBottom();
+        return false;
+      },
+      child: SizeChangedLayoutNotifier(
+      child: Stack(
       children: [
         ListView.builder(
           controller: _scrollController,
@@ -513,6 +676,8 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
             ),
           ),
       ],
+    ),
+      ),
     );
   }
 
@@ -563,98 +728,206 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
   }
 }
 
-class _UserBubble extends StatelessWidget {
+class _UserBubble extends StatefulWidget {
   final ChatEntry entry;
   final bool isNewSender;
   const _UserBubble({required this.entry, this.isNewSender = true});
 
   @override
+  State<_UserBubble> createState() => _UserBubbleState();
+}
+
+class _UserBubbleState extends State<_UserBubble> {
+  bool _hovering = false;
+  bool _copied = false;
+
+  /// Memoized decoded image bytes to avoid re-decoding base64 on every rebuild.
+  /// Key: attachment index, Value: decoded Uint8List.
+  late final Map<int, Uint8List> _decodedImages = _decodeImageAttachments();
+
+  Map<int, Uint8List> _decodeImageAttachments() {
+    final result = <int, Uint8List>{};
+    final attachments = widget.entry.attachments;
+    if (attachments == null) return result;
+    for (int i = 0; i < attachments.length; i++) {
+      final a = attachments[i];
+      final mime = a['mimeType'] as String? ?? '';
+      // Support both OpenClaw field name (content) and legacy (base64)
+      final b64 = a['content'] as String? ?? a['base64'] as String?;
+      if (mime.startsWith('image/') && b64 != null) {
+        try {
+          result[i] = base64Decode(b64);
+        } catch (_) {
+          // Skip invalid base64
+        }
+      }
+    }
+    return result;
+  }
+
+  void _copyMessage() {
+    Clipboard.setData(ClipboardData(text: widget.entry.content)).then((_) {
+      if (!mounted) return;
+      setState(() => _copied = true);
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted) setState(() => _copied = false);
+      });
+    }).catchError((_) {});
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final t = ShellTokens.of(context);
-    return Padding(
-      padding: EdgeInsets.only(
-        top: isNewSender ? 14 : 3,
-        bottom: 1,
-        left: 80,
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.end,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Flexible(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: t.accentPrimary.withOpacity(0.08),
-                border: Border.all(color: t.accentPrimary.withOpacity(0.18), width: 0.5),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  if (entry.attachments != null && entry.attachments!.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: Wrap(
-                        spacing: 4,
-                        runSpacing: 4,
-                        alignment: WrapAlignment.end,
-                        children: entry.attachments!.map((a) {
-                          final mime = a['mimeType'] as String? ?? '';
-                          final name = a['name'] as String? ?? 'file';
-                          if (mime.startsWith('image/') && a['base64'] != null) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovering = true),
+      onExit: (_) => setState(() => _hovering = false),
+      child: Padding(
+        padding: EdgeInsets.only(
+          top: widget.isNewSender ? 14 : 3,
+          bottom: 1,
+          left: 80,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Flexible(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: t.accentPrimary.withOpacity(0.08),
+                  border: Border.all(color: t.accentPrimary.withOpacity(0.18), width: 0.5),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    if (widget.entry.attachments != null && widget.entry.attachments!.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Wrap(
+                          spacing: 4,
+                          runSpacing: 4,
+                          alignment: WrapAlignment.end,
+                          children: List.generate(widget.entry.attachments!.length, (i) {
+                            final a = widget.entry.attachments![i];
+                            final mime = a['mimeType'] as String? ?? '';
+                            // Support both OpenClaw (fileName) and legacy (name) field names
+                            final name = a['fileName'] as String? ?? a['name'] as String? ?? 'file';
+                            final cachedBytes = _decodedImages[i];
+                            if (cachedBytes != null) {
+                              return Container(
+                                constraints: const BoxConstraints(maxWidth: 180, maxHeight: 120),
+                                decoration: BoxDecoration(
+                                  border: Border.all(color: t.border, width: 0.5),
+                                ),
+                                child: Image.memory(
+                                  cachedBytes,
+                                  fit: BoxFit.cover,
+                                  gaplessPlayback: true,
+                                ),
+                              );
+                            }
+                            // Pick icon based on file type
+                            final ext = name.contains('.') ? name.substring(name.lastIndexOf('.')).toLowerCase() : '';
+                            final IconData fileIcon;
+                            if (mime.startsWith('audio/')) {
+                              fileIcon = Icons.audiotrack;
+                            } else if (mime.startsWith('video/')) {
+                              fileIcon = Icons.videocam;
+                            } else if (mime == 'application/pdf' || ext == '.pdf') {
+                              fileIcon = Icons.picture_as_pdf;
+                            } else if (const {'.docx', '.doc', '.odt', '.rtf'}.contains(ext) ||
+                                       mime.contains('wordprocessingml') || mime == 'application/msword' ||
+                                       mime.contains('opendocument.text') || mime == 'application/rtf') {
+                              fileIcon = Icons.description;
+                            } else if (const {'.xlsx', '.xls', '.ods', '.csv'}.contains(ext) ||
+                                       mime.contains('spreadsheetml') || mime == 'application/vnd.ms-excel' ||
+                                       mime.contains('opendocument.spreadsheet') || mime == 'text/csv') {
+                              fileIcon = Icons.table_chart;
+                            } else if (const {'.pptx', '.ppt', '.odp'}.contains(ext) ||
+                                       mime.contains('presentationml') || mime == 'application/vnd.ms-powerpoint' ||
+                                       mime.contains('opendocument.presentation')) {
+                              fileIcon = Icons.slideshow;
+                            } else if (mime == 'application/epub+zip' || ext == '.epub') {
+                              fileIcon = Icons.menu_book;
+                            } else if (const {'.py', '.js', '.ts', '.dart', '.java', '.c', '.cpp', '.go', '.rs', '.rb', '.php', '.kt', '.swift', '.lua', '.sh', '.bash', '.zsh'}.contains(ext) ||
+                                       mime.startsWith('text/x-') || mime == 'text/javascript' || mime == 'text/typescript') {
+                              fileIcon = Icons.code;
+                            } else {
+                              fileIcon = Icons.insert_drive_file;
+                            }
                             return Container(
-                              constraints: const BoxConstraints(maxWidth: 180, maxHeight: 120),
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                               decoration: BoxDecoration(
+                                color: t.surfaceCard,
                                 border: Border.all(color: t.border, width: 0.5),
                               ),
-                              child: Image.memory(
-                                base64Decode(a['base64'] as String),
-                                fit: BoxFit.cover,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(fileIcon, size: 10, color: t.fgMuted),
+                                  const SizedBox(width: 4),
+                                  Text(name,
+                                    style: TextStyle(fontSize: 9, color: t.fgTertiary)),
+                                ],
                               ),
                             );
-                          }
-                          return Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: t.surfaceCard,
-                              border: Border.all(color: t.border, width: 0.5),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  mime.startsWith('audio/') ? Icons.audiotrack
-                                    : mime.startsWith('video/') ? Icons.videocam
-                                    : Icons.insert_drive_file,
-                                  size: 10, color: t.fgMuted),
-                                const SizedBox(width: 4),
-                                Text(name,
-                                  style: TextStyle(fontSize: 9, color: t.fgTertiary)),
-                              ],
-                            ),
-                          );
-                        }).toList(),
+                          }),
+                        ),
                       ),
-                    ),
-                  if (entry.content.isNotEmpty && entry.content != '[attachment]')
-                    SelectableText(
-                      entry.content,
-                      style: theme.textTheme.bodyLarge?.copyWith(
-                        color: t.fgPrimary,
-                        height: 1.5,
+                    if (widget.entry.content.isNotEmpty && widget.entry.content != '[attachment]')
+                      SelectableText(
+                        widget.entry.content,
+                        style: theme.textTheme.bodyLarge?.copyWith(
+                          color: t.fgPrimary,
+                          height: 1.5,
+                        ),
                       ),
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (_hovering)
+                          GestureDetector(
+                            onTap: _copyMessage,
+                            child: MouseRegion(
+                              cursor: SystemMouseCursors.click,
+                              child: Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      _copied ? Icons.check : Icons.copy,
+                                      size: 12,
+                                      color: _copied ? t.accentPrimary : t.fgMuted,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      _copied ? 'copied' : 'copy',
+                                      style: TextStyle(
+                                        fontSize: 9,
+                                        color: _copied ? t.accentPrimary : t.fgMuted,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        Text(
+                          _formatTimestamp(widget.entry.timestamp),
+                          style: TextStyle(fontSize: 9, color: t.fgMuted),
+                        ),
+                      ],
                     ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _formatTimestamp(entry.timestamp),
-                    style: TextStyle(fontSize: 9, color: t.fgMuted),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -673,12 +946,76 @@ class _AssistantBubbleState extends State<_AssistantBubble> {
   bool _hovering = false;
   bool _copied = false;
 
-  void _copyMessage() {
-    Clipboard.setData(ClipboardData(text: widget.entry.content));
-    setState(() => _copied = true);
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) setState(() => _copied = false);
+  /// Image file extensions used for detection.
+  static const _imgExts = r'\.(?:png|jpe?g|gif|webp|svg|bmp|tiff?)';
+
+  /// 1. Bare /__openclaw__/media/ URLs not already inside markdown image syntax.
+  static final _mediaUrlRe = RegExp(
+    r'(?<!\]\()' // not preceded by ](
+    r'(/__openclaw__/media/[^\s)\]`]+' + _imgExts + ')',
+    caseSensitive: false,
+  );
+
+  /// 2. Absolute workspace paths:
+  ///    /home/node/.openclaw/workspace/<relative-path>.png
+  static final _absWorkspaceRe = RegExp(
+    r'(?<!\]\()' // not preceded by ](
+    r'/home/node/\.openclaw/workspace/([^\s)\]`]+' + _imgExts + ')',
+    caseSensitive: false,
+  );
+
+  /// 3. MEDIA: token lines (in case gateway didn't strip them).
+  static final _mediaTokenRe = RegExp(
+    r'MEDIA:\s*([^\s]+' + _imgExts + ')',
+    caseSensitive: false,
+  );
+
+  /// Pre-process assistant content to ensure workspace images render inline.
+  ///
+  /// Converts three patterns into markdown ![image](url):
+  ///   - /__openclaw__/media/<path>.png  (already correct URL)
+  ///   - /home/node/.openclaw/workspace/<path>.png  (absolute -> media URL)
+  ///   - MEDIA: <path>.png  (raw token -> media URL)
+  ///
+  /// Skips matches already inside markdown image syntax `](url)`.
+  String _enrichContentWithImages(String content) {
+    var result = content;
+
+    // Pass 1: Convert absolute workspace paths to media URLs
+    result = result.replaceAllMapped(_absWorkspaceRe, (m) {
+      if (m.start > 0 && result[m.start - 1] == '(') return m.group(0)!;
+      final relative = m.group(1)!;
+      return '![image](/__openclaw__/media/$relative)';
     });
+
+    // Pass 2: Convert MEDIA: tokens to media URLs
+    result = result.replaceAllMapped(_mediaTokenRe, (m) {
+      final raw = m.group(1)!;
+      // Strip workspace prefix if present
+      final relative = raw.startsWith('/home/node/.openclaw/workspace/')
+          ? raw.substring('/home/node/.openclaw/workspace/'.length)
+          : raw;
+      return '![image](/__openclaw__/media/$relative)';
+    });
+
+    // Pass 3: Convert bare /__openclaw__/media/ URLs
+    result = result.replaceAllMapped(_mediaUrlRe, (m) {
+      if (m.start > 0 && result[m.start - 1] == '(') return m.group(0)!;
+      final url = m.group(1)!;
+      return '![image]($url)';
+    });
+
+    return result;
+  }
+
+  void _copyMessage() {
+    Clipboard.setData(ClipboardData(text: widget.entry.content)).then((_) {
+      if (!mounted) return;
+      setState(() => _copied = true);
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted) setState(() => _copied = false);
+      });
+    }).catchError((_) {});
   }
 
   @override
@@ -722,7 +1059,7 @@ class _AssistantBubbleState extends State<_AssistantBubble> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   MarkdownBody(
-                    data: widget.entry.content,
+                    data: _enrichContentWithImages(widget.entry.content),
                     selectable: true,
                     styleSheet: MarkdownStyleSheet(
                       p: baseStyle,
@@ -755,6 +1092,41 @@ class _AssistantBubbleState extends State<_AssistantBubble> {
                         border: Border(top: BorderSide(color: t.border, width: 0.5)),
                       ),
                     ),
+                    imageBuilder: (uri, title, alt) {
+                      return ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 400, maxHeight: 300),
+                        child: Image.network(
+                          uri.toString(),
+                          fit: BoxFit.contain,
+                          loadingBuilder: (_, child, progress) {
+                            if (progress == null) return child;
+                            return SizedBox(
+                              height: 80,
+                              child: Center(child: SizedBox(
+                                width: 60,
+                                child: LinearProgressIndicator(
+                                  value: progress.expectedTotalBytes != null
+                                    ? progress.cumulativeBytesLoaded / progress.expectedTotalBytes!
+                                    : null,
+                                  backgroundColor: t.border,
+                                  color: t.accentPrimary,
+                                  minHeight: 2,
+                                ),
+                              )),
+                            );
+                          },
+                          errorBuilder: (_, __, ___) => Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: t.surfaceBase,
+                              border: Border.all(color: t.border, width: 0.5),
+                            ),
+                            child: Text('[image failed to load]',
+                              style: TextStyle(fontSize: 11, color: t.fgMuted)),
+                          ),
+                        ),
+                      );
+                    },
                     onTapLink: (text, href, title) {
                       if (href != null) {
                         Clipboard.setData(ClipboardData(text: href));
@@ -864,46 +1236,6 @@ class _StreamingIndicatorState extends State<_StreamingIndicator>
           }),
         );
       },
-    );
-  }
-}
-
-class _CursorBlink extends StatefulWidget {
-  @override
-  State<_CursorBlink> createState() => _CursorBlinkState();
-}
-
-class _CursorBlinkState extends State<_CursorBlink>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _opacity;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 600),
-    )..repeat(reverse: true);
-    _opacity = _controller.drive(Tween(begin: 0.0, end: 1.0));
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final t = ShellTokens.of(context);
-    return FadeTransition(
-      opacity: _opacity,
-      child: Container(
-        width: 7,
-        height: 14,
-        color: t.accentPrimary.withOpacity(0.6),
-      ),
     );
   }
 }

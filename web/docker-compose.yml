@@ -10,7 +10,7 @@ services:
       - supabase-db-data:/var/lib/postgresql/data
       - ./supabase/migrations:/docker-entrypoint-initdb.d/rbac:ro
     environment:
-      POSTGRES_PASSWORD: ${SUPABASE_POSTGRES_PASSWORD:-86f8df7b8a5bd91b093baa52f985cdd7}
+      POSTGRES_PASSWORD: ${SUPABASE_POSTGRES_PASSWORD:?Set SUPABASE_POSTGRES_PASSWORD in .env}
       POSTGRES_DB: supabase
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -50,12 +50,12 @@ services:
     environment:
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: root
-      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-9e2254f6b1dccfe9db011eedba5a7c67e7fccc0d2d4b12b08f7f0cb8525a0f32}
-      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzcyMjcwMDU0LCJleHAiOjE5Mjk5NTAwNTR9.U1xu4Was-iunrn8oXeA-2n8hMpCgcDVhiGXxndiB3TU}
-      SUPABASE_POSTGRES_PASSWORD: ${SUPABASE_POSTGRES_PASSWORD:-86f8df7b8a5bd91b093baa52f985cdd7}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-a34013d0f1e1edfc7407c769}
-      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-trinity-shell-secret}
-      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-08580dde290a68d7920acdaf5b6a1417b914b082ce031e94}
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:?Set SUPABASE_JWT_SECRET in .env}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:?Set SUPABASE_ANON_KEY in .env}
+      SUPABASE_POSTGRES_PASSWORD: ${SUPABASE_POSTGRES_PASSWORD:?Set SUPABASE_POSTGRES_PASSWORD in .env}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD in .env}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:?Set KEYCLOAK_CLIENT_SECRET in .env}
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:?Set OPENCLAW_GATEWAY_TOKEN in .env}
       SUPERADMIN_ALLOWLIST: ${SUPERADMIN_ALLOWLIST:-}
       ENABLE_DEFAULT_SUPERADMIN: ${ENABLE_DEFAULT_SUPERADMIN:-true}
     entrypoint: ["/bin/sh", "/vault/scripts/init.sh"]
@@ -73,6 +73,15 @@ services:
     volumes:
       - ./loki/config.yml:/etc/loki/local-config.yaml:ro
       - loki-data:/loki
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3100/ready || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     networks:
       - trinity
 
@@ -85,11 +94,20 @@ services:
       - "3000:3000"
     environment:
       GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin123}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?Set GRAFANA_PASSWORD in .env}
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - grafana-data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256M
     depends_on:
       - loki
     networks:
@@ -121,10 +139,10 @@ services:
       GOTRUE_API_PORT: 9999
       API_EXTERNAL_URL: ${API_EXTERNAL_URL:-http://localhost}
       GOTRUE_DB_DRIVER: postgres
-      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${SUPABASE_POSTGRES_PASSWORD:-86f8df7b8a5bd91b093baa52f985cdd7}@supabase-db:5432/supabase?sslmode=disable
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${SUPABASE_POSTGRES_PASSWORD:?Set SUPABASE_POSTGRES_PASSWORD in .env}@supabase-db:5432/supabase?sslmode=disable
       GOTRUE_SITE_URL: ${SITE_URL:-http://localhost}
       GOTRUE_URI_ALLOW_LIST: ""
-      GOTRUE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-9e2254f6b1dccfe9db011eedba5a7c67e7fccc0d2d4b12b08f7f0cb8525a0f32}
+      GOTRUE_JWT_SECRET: ${SUPABASE_JWT_SECRET:?Set SUPABASE_JWT_SECRET in .env}
       GOTRUE_JWT_EXP: 3600
       GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
       GOTRUE_DISABLE_SIGNUP: "false"
@@ -134,7 +152,7 @@ services:
       # Keycloak OIDC
       GOTRUE_EXTERNAL_KEYCLOAK_ENABLED: "true"
       GOTRUE_EXTERNAL_KEYCLOAK_CLIENT_ID: trinity-shell
-      GOTRUE_EXTERNAL_KEYCLOAK_SECRET: ${KEYCLOAK_CLIENT_SECRET:-trinity-shell-secret}
+      GOTRUE_EXTERNAL_KEYCLOAK_SECRET: ${KEYCLOAK_CLIENT_SECRET:?Set KEYCLOAK_CLIENT_SECRET in .env}
       GOTRUE_EXTERNAL_KEYCLOAK_URL: http://keycloak:8080/realms/trinity
       GOTRUE_EXTERNAL_KEYCLOAK_REDIRECT_URI: ${API_EXTERNAL_URL:-http://localhost}/supabase/auth/v1/callback
     networks:
@@ -149,7 +167,7 @@ services:
     environment:
       KC_HEALTH_ENABLED: "true"
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-a34013d0f1e1edfc7407c769}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD in .env}
       AUTHENTIK_ENABLED: ${AUTHENTIK_ENABLED:-false}
       AUTHENTIK_ISSUER_URL: ${AUTHENTIK_ISSUER_URL:-}
       AUTHENTIK_CLIENT_ID: ${AUTHENTIK_CLIENT_ID:-}
@@ -160,7 +178,7 @@ services:
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://supabase-db:5432/supabase
       KC_DB_USERNAME: postgres
-      KC_DB_PASSWORD: ${SUPABASE_POSTGRES_PASSWORD:-86f8df7b8a5bd91b093baa52f985cdd7}
+      KC_DB_PASSWORD: ${SUPABASE_POSTGRES_PASSWORD:?Set SUPABASE_POSTGRES_PASSWORD in .env}
       KC_DB_SCHEMA: keycloak
       KC_HTTP_RELATIVE_PATH: /keycloak
     volumes:
@@ -183,7 +201,7 @@ services:
       KEYCLOAK_REALM: trinity
       KEYCLOAK_ADMIN_REALM: master
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-a34013d0f1e1edfc7407c769}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD in .env}
       AUTHENTIK_ENABLED: ${AUTHENTIK_ENABLED:-false}
       AUTHENTIK_ISSUER_URL: ${AUTHENTIK_ISSUER_URL:-}
       AUTHENTIK_CLIENT_ID: ${AUTHENTIK_CLIENT_ID:-}
@@ -206,17 +224,28 @@ services:
     restart: unless-stopped
     environment:
       AUTH_SERVICE_PORT: 18791
-      JWT_SECRET: ${SUPABASE_JWT_SECRET:-9e2254f6b1dccfe9db011eedba5a7c67e7fccc0d2d4b12b08f7f0cb8525a0f32}
+      JWT_SECRET: ${SUPABASE_JWT_SECRET:?Set SUPABASE_JWT_SECRET in .env}
       SUPABASE_AUTH_URL: http://supabase-auth:9999
-      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzcyMjcwMDU0LCJleHAiOjE5Mjk5NTAwNTR9.U1xu4Was-iunrn8oXeA-2n8hMpCgcDVhiGXxndiB3TU}
-      ENABLE_DEFAULT_SUPERADMIN: "true"
-      DEFAULT_SUPERADMIN_EMAIL: admin@trinity.local
-      DEFAULT_SUPERADMIN_PASSWORD: admin
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:?Set SUPABASE_ANON_KEY in .env}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost}
+      ENABLE_DEFAULT_SUPERADMIN: ${ENABLE_DEFAULT_SUPERADMIN:-false}
+      DEFAULT_SUPERADMIN_EMAIL: ${DEFAULT_SUPERADMIN_EMAIL:-admin@trinity.local}
+      DEFAULT_SUPERADMIN_PASSWORD: ${DEFAULT_SUPERADMIN_PASSWORD:?Set DEFAULT_SUPERADMIN_PASSWORD in .env}
       POSTGRES_HOST: supabase-db
       POSTGRES_PORT: 5432
       POSTGRES_DB: supabase
-      POSTGRES_PASSWORD: ${SUPABASE_POSTGRES_PASSWORD:-86f8df7b8a5bd91b093baa52f985cdd7}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${SUPABASE_POSTGRES_PASSWORD:?Set SUPABASE_POSTGRES_PASSWORD in .env}
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:18791/auth/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256M
     depends_on:
       supabase-db:
         condition: service_healthy
@@ -246,6 +275,10 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
     networks:
       - trinity
 
@@ -260,7 +293,17 @@ services:
       - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}
       - OPENCLAW_CONTAINER_NAME=trinity-openclaw
       - TERMINAL_PROXY_PORT=18790
-      - JWT_SECRET=${SUPABASE_JWT_SECRET:-9e2254f6b1dccfe9db011eedba5a7c67e7fccc0d2d4b12b08f7f0cb8525a0f32}
+      - JWT_SECRET=${SUPABASE_JWT_SECRET:?Set SUPABASE_JWT_SECRET in .env}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:18790/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256M
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
@@ -278,7 +321,7 @@ services:
         GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
         TERMINAL_WS_URL: ws://localhost/terminal/
         AUTH_SERVICE_URL: http://localhost
-        SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzcyMjcwMDU0LCJleHAiOjE5Mjk5NTAwNTR9.U1xu4Was-iunrn8oXeA-2n8hMpCgcDVhiGXxndiB3TU}
+        SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:?Set SUPABASE_ANON_KEY in .env}
     container_name: trinity-flutter-builder
     volumes:
       - flutter-build:/output

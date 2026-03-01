@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
+import 'dart:js' as js;
+import 'dart:js_util' as js_util;
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -309,8 +311,12 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
     setState(() => _showExportMenu = false);
   }
 
-  // Canvas export: copy as image to clipboard
+  // Canvas export: copy as image to clipboard (browser Clipboard API)
+  bool _copyingImage = false;
+  bool _imageCopied = false;
   Future<void> _copyAsImage() async {
+    if (_copyingImage) return;
+    setState(() { _copyingImage = true; _imageCopied = false; });
     try {
       final boundary = _repaintBoundaryKey.currentContext
           ?.findRenderObject() as RenderRepaintBoundary?;
@@ -318,13 +324,49 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
       final image = await boundary.toImage(pixelRatio: 2.0);
       final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
       if (byteData == null) return;
-      // On web, clipboard.write with ClipboardItem is needed for images
-      // Fall back to saving the PNG bytes info for user
-      await Clipboard.setData(ClipboardData(text: '[Canvas image captured]'));
+      final bytes = byteData.buffer.asUint8List();
+
+      // Use dart:html Blob + JS interop on the native ClipboardItem
+      // to avoid the unreliable eval+promiseToFuture path.
+      bool copied = false;
+      try {
+        final blob = html.Blob([bytes], 'image/png');
+        final clipboardItem = js_util.callConstructor(
+          js_util.getProperty(html.window, 'ClipboardItem'),
+          [js_util.jsify({'image/png': blob})],
+        );
+        final clipboard = js_util.getProperty(html.window.navigator, 'clipboard');
+        final promise = js_util.callMethod(clipboard, 'write', [
+          js_util.jsify([clipboardItem]),
+        ]);
+        await js_util.promiseToFuture(promise);
+        copied = true;
+      } catch (clipErr) {
+        debugPrint('[Canvas] clipboard write failed: $clipErr');
+      }
+
+      if (copied) {
+        if (mounted) setState(() => _imageCopied = true);
+      } else {
+        // Fallback: download the image only when clipboard truly failed
+        debugPrint('[Canvas] falling back to download');
+        final b64 = base64Encode(bytes);
+        final dataUrl = 'data:image/png;base64,$b64';
+        html.AnchorElement(href: dataUrl)
+          ..setAttribute('download', 'canvas-${DateTime.now().millisecondsSinceEpoch}.png')
+          ..click();
+      }
     } catch (e) {
       debugPrint('[Canvas] copy image error: $e');
     }
-    setState(() => _showExportMenu = false);
+    if (mounted) {
+      setState(() => _copyingImage = false);
+      if (_imageCopied) {
+        Future.delayed(const Duration(seconds: 2), () {
+          if (mounted) setState(() => _imageCopied = false);
+        });
+      }
+    }
   }
 
   @override
@@ -391,68 +433,98 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
             ),
           ),
         ),
-        // Export toolbar
+        // Export toolbar: copy image button (standalone) + download menu
         Positioned(
           top: 4,
           right: 4,
-          child: _buildExportToolbar(t, theme),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Copy image button (standalone, separate from menu)
+              GestureDetector(
+                onTap: _copyAsImage,
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: t.surfaceBase.withOpacity(0.8),
+                      border: Border.all(color: t.border, width: 0.5),
+                    ),
+                    child: _copyingImage
+                      ? SizedBox(
+                          width: 12, height: 12,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 1.5, color: t.accentPrimary))
+                      : Icon(
+                          _imageCopied ? Icons.check : Icons.content_copy,
+                          size: 12,
+                          color: _imageCopied ? t.accentPrimary : t.fgMuted,
+                        ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 2),
+              // Download menu
+              _buildExportToolbar(t, theme),
+            ],
+          ),
         ),
       ],
     );
   }
 
   Widget _buildExportToolbar(ShellTokens t, ThemeData theme) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        GestureDetector(
-          onTap: () => setState(() => _showExportMenu = !_showExportMenu),
-          child: MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: Container(
-              padding: const EdgeInsets.all(4),
+    return TapRegion(
+      onTapOutside: (_) {
+        if (_showExportMenu) setState(() => _showExportMenu = false);
+      },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          GestureDetector(
+            onTap: () => setState(() => _showExportMenu = !_showExportMenu),
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: Container(
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: t.surfaceBase.withOpacity(0.8),
+                  border: Border.all(color: t.border, width: 0.5),
+                ),
+                child: Icon(Icons.download, size: 12, color: t.fgMuted),
+              ),
+            ),
+          ),
+          if (_showExportMenu) ...[
+            const SizedBox(height: 2),
+            Container(
               decoration: BoxDecoration(
-                color: t.surfaceBase.withOpacity(0.8),
+                color: t.surfaceBase,
                 border: Border.all(color: t.border, width: 0.5),
               ),
-              child: Icon(Icons.download, size: 12, color: t.fgMuted),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _ExportMenuItem(
+                    label: 'download PNG',
+                    icon: Icons.image,
+                    onTap: _exportAsPng,
+                    tokens: t, theme: theme,
+                  ),
+                  _ExportMenuItem(
+                    label: 'download JSON',
+                    icon: Icons.code,
+                    onTap: _exportAsJson,
+                    tokens: t, theme: theme,
+                  ),
+                ],
+              ),
             ),
-          ),
-        ),
-        if (_showExportMenu) ...[
-          const SizedBox(height: 2),
-          Container(
-            decoration: BoxDecoration(
-              color: t.surfaceBase,
-              border: Border.all(color: t.border, width: 0.5),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _ExportMenuItem(
-                  label: 'download PNG',
-                  icon: Icons.image,
-                  onTap: _exportAsPng,
-                  tokens: t, theme: theme,
-                ),
-                _ExportMenuItem(
-                  label: 'download JSON',
-                  icon: Icons.code,
-                  onTap: _exportAsJson,
-                  tokens: t, theme: theme,
-                ),
-                _ExportMenuItem(
-                  label: 'copy as image',
-                  icon: Icons.content_copy,
-                  onTap: _copyAsImage,
-                  tokens: t, theme: theme,
-                ),
-              ],
-            ),
-          ),
+          ],
         ],
-      ],
+      ),
     );
   }
 
@@ -694,26 +766,30 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
     if (url.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Image.network(url, fit: BoxFit.contain,
-        loadingBuilder: (_, child, progress) {
-          if (progress == null) return child;
-          return SizedBox(
-            height: 80,
-            child: Center(child: LinearProgressIndicator(
-              value: progress.expectedTotalBytes != null
-                  ? progress.cumulativeBytesLoaded / progress.expectedTotalBytes!
-                  : null,
-              backgroundColor: t.surfaceElevated,
-              color: t.accentPrimary,
-              minHeight: 2,
-            )),
-          );
-        },
-        errorBuilder: (_, __, ___) => Container(
-          padding: const EdgeInsets.all(8),
-          color: t.surfaceCard,
-          child: Text('[Image failed to load]',
-              style: TextStyle(color: t.fgMuted, fontSize: 12)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 600, maxHeight: 400),
+        child: Image.network(url, fit: BoxFit.contain,
+          loadingBuilder: (_, child, progress) {
+            if (progress == null) return child;
+            return SizedBox(
+              height: 80,
+              width: double.infinity,
+              child: Center(child: LinearProgressIndicator(
+                value: progress.expectedTotalBytes != null
+                    ? progress.cumulativeBytesLoaded / progress.expectedTotalBytes!
+                    : null,
+                backgroundColor: t.surfaceElevated,
+                color: t.accentPrimary,
+                minHeight: 2,
+              )),
+            );
+          },
+          errorBuilder: (_, __, ___) => Container(
+            padding: const EdgeInsets.all(8),
+            color: t.surfaceCard,
+            child: Text('[Image failed to load]',
+                style: TextStyle(color: t.fgMuted, fontSize: 12)),
+          ),
         ),
       ),
     );
@@ -846,7 +922,7 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
     final children = _buildChildren(childIds, surface, theme, t);
     return ConstrainedBox(
       constraints: const BoxConstraints(maxHeight: 400),
-      child: ListView(shrinkWrap: true, children: children),
+      child: ListView(children: children),
     );
   }
 

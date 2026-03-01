@@ -1,0 +1,11 @@
+{
+  "id": "file-upload",
+  "name": "File Upload",
+  "description": "HTTP file upload endpoint for webchat non-image attachments. Writes files to workspace/media/inbound/ and returns the path for agent access.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

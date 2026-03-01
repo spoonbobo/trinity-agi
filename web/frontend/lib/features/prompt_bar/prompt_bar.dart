@@ -1,9 +1,14 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:html' as html;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme.dart';
 import '../../core/providers.dart';
+import '../../core/dialog_service.dart';
+import '../../core/attachment_utils.dart';
 import 'voice_input.dart';
 import 'prompt_templates.dart';
 
@@ -15,6 +20,9 @@ class PromptBar extends ConsumerStatefulWidget {
     required this.enabled,
   });
 
+  /// Key to access the state from shell_page (for drag-and-drop).
+  static final globalKey = GlobalKey<_PromptBarState>();
+
   @override
   ConsumerState<PromptBar> createState() => _PromptBarState();
 }
@@ -23,9 +31,16 @@ class _PromptBarState extends ConsumerState<PromptBar> {
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
   final _voiceController = VoiceInputController();
+  final _layerLink = LayerLink();
+  OverlayEntry? _templateOverlay;
+  StreamSubscription? _pasteSub;
   bool _sending = false;
   bool _showTemplates = false;
+  String? _dismissedAtText; // Text snapshot when Esc was pressed; overlay reopens on next edit
+  int _activeTemplateIndex = 0; // Keyboard navigation index
   List<_AttachmentInfo> _attachments = [];
+  String? _attachError;     // Inline error for rejected files
+  int _processingCount = 0; // Files currently being read/compressed
 
   @override
   void initState() {
@@ -37,11 +52,28 @@ class _PromptBarState extends ConsumerState<PromptBar> {
     _controller.addListener(() {
       if (mounted) {
         final text = _controller.text;
-        if (text.startsWith('/') && !_showTemplates) {
-          setState(() => _showTemplates = true);
-        } else if (!text.startsWith('/') && _showTemplates) {
-          setState(() => _showTemplates = false);
+        if (!text.startsWith('/')) {
+          // User backspaced past "/" — clear dismiss snapshot
+          _dismissedAtText = null;
+          if (_showTemplates) {
+            _showTemplates = false;
+            _removeTemplateOverlay();
+          }
+          setState(() {});
+        } else if (!_showTemplates) {
+          // Text starts with "/" and overlay is not showing.
+          // Reopen if: never dismissed, OR text changed since Esc was pressed.
+          if (_dismissedAtText == null || text != _dismissedAtText) {
+            _dismissedAtText = null; // Clear stale snapshot
+            _showTemplates = true;
+            _activeTemplateIndex = 0;
+            _showTemplateOverlay();
+            setState(() {});
+          }
         } else {
+          // Overlay is showing — update filter as user types
+          _activeTemplateIndex = 0;
+          _templateOverlay?.markNeedsBuild();
           setState(() {});
         }
       }
@@ -50,15 +82,69 @@ class _PromptBarState extends ConsumerState<PromptBar> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusNode.requestFocus();
     });
+    // Register global paste listener for Ctrl+V image paste
+    _pasteSub = html.document.onPaste.listen(_handlePaste);
   }
 
   @override
   void dispose() {
+    _pasteSub?.cancel();
+    _removeTemplateOverlay();
     _controller.dispose();
     _focusNode.dispose();
     _voiceController.dispose();
     super.dispose();
   }
+
+  void _dismissAndCleanup() {
+    _showTemplates = false;
+    _removeTemplateOverlay();
+    if (mounted) setState(() {});
+  }
+
+  void _showTemplateOverlay() {
+    _removeTemplateOverlay();
+    _templateOverlay = OverlayEntry(
+      builder: (context) => Positioned(
+        width: 320,
+        child: CompositedTransformFollower(
+          link: _layerLink,
+          showWhenUnlinked: false,
+          targetAnchor: Alignment.topLeft,
+          followerAnchor: Alignment.bottomLeft,
+          offset: const Offset(12, -4),
+          child: Material(
+            color: Colors.transparent,
+            child: PromptTemplatePanel(
+              filter: _controller.text.startsWith('/')
+                  ? _controller.text.substring(1)
+                  : '',
+              activeIndex: _activeTemplateIndex,
+              onSelect: (content) {
+                _controller.text = content;
+                _controller.selection = TextSelection.collapsed(
+                  offset: content.length);
+                _dismissAndCleanup();
+                _focusNode.requestFocus();
+              },
+              onDismiss: _dismissAndCleanup,
+            ),
+          ),
+        ),
+      ),
+    );
+    Overlay.of(context).insert(_templateOverlay!);
+  }
+
+  void _removeTemplateOverlay() {
+    _templateOverlay?.remove();
+    _templateOverlay = null;
+  }
+
+  static const _gatewayToken = String.fromEnvironment(
+    'GATEWAY_TOKEN',
+    defaultValue: 'replace-me-with-a-real-token',
+  );
 
   Future<void> _send() async {
     final text = _controller.text.trim();
@@ -73,24 +159,79 @@ class _PromptBarState extends ConsumerState<PromptBar> {
       final sessionKey = ref.read(activeSessionProvider);
 
       if (_attachments.isNotEmpty) {
-        final attachmentData = _attachments.map((a) => {
-          'name': a.name,
-          'mimeType': a.mimeType,
-          'base64': a.base64,
+        // Split attachments: images go via WebSocket, non-images via HTTP upload
+        final imageAttachments = <_AttachmentInfo>[];
+        final fileAttachments = <_AttachmentInfo>[];
+        for (final a in _attachments) {
+          if (a.mimeType.startsWith('image/')) {
+            imageAttachments.add(a);
+          } else {
+            fileAttachments.add(a);
+          }
+        }
+
+        // Upload non-image files to workspace via HTTP in parallel
+        final uploadFutures = fileAttachments.map((a) async {
+          try {
+            final bytes = base64Decode(a.base64);
+            final result = await uploadFileToWorkspace(
+              bytes: bytes,
+              fileName: a.name,
+              mimeType: a.mimeType,
+              gatewayToken: _gatewayToken,
+            );
+            if (result.ok && result.path != null) {
+              return result.path!;
+            } else {
+              if (kDebugMode) debugPrint('[PromptBar] upload failed: ${result.error}');
+              return '[Upload failed: ${a.name}]';
+            }
+          } catch (e) {
+            if (kDebugMode) debugPrint('[PromptBar] upload error: $e');
+            return '[Upload failed: ${a.name}]';
+          }
         }).toList();
-        await client.sendChatMessageWithAttachments(
-          text.isNotEmpty ? text : '[attachment]',
-          sessionKey: sessionKey,
-          attachments: attachmentData,
-        );
+        final uploadedPaths = await Future.wait(uploadFutures);
+
+        // Build the message: user text + file references
+        final parts = <String>[];
+        if (text.isNotEmpty) parts.add(text);
+        for (final p in uploadedPaths) {
+          if (p.startsWith('[')) {
+            parts.add(p); // error placeholder
+          } else {
+            parts.add('[File: $p]');
+          }
+        }
+        final message = parts.isNotEmpty ? parts.join('\n') : '[attachment]';
+
+        if (imageAttachments.isNotEmpty) {
+          // Send images via WebSocket attachments (gateway-native path)
+          final attachmentData = imageAttachments.map((a) => {
+            'content': a.base64,
+            'mimeType': a.mimeType,
+            'fileName': a.name,
+            'type': 'image',
+          }).toList();
+          await client.sendChatMessageWithAttachments(
+            message,
+            sessionKey: sessionKey,
+            attachments: attachmentData,
+          );
+        } else {
+          // Non-image only: send as regular message with file path references
+          await client.sendChatMessage(message, sessionKey: sessionKey);
+        }
         setState(() => _attachments = []);
       } else {
         await client.sendChatMessage(text, sessionKey: sessionKey);
       }
     } finally {
-      if (mounted) setState(() => _sending = false);
+      if (mounted) {
+        setState(() => _sending = false);
+        _focusNode.requestFocus();
+      }
     }
-    _focusNode.requestFocus();
   }
 
   // #8: Abort the current agent run
@@ -113,31 +254,124 @@ class _PromptBarState extends ConsumerState<PromptBar> {
     }
   }
 
-  // File picker
+  // --- File handling (all phases) ---
+
+  /// Dismiss attachment error after a delay.
+  void _showAttachError(String msg) {
+    setState(() => _attachError = msg);
+    Future.delayed(const Duration(seconds: 4), () {
+      if (mounted) setState(() => _attachError = null);
+    });
+  }
+
+  /// File picker (enhanced with validation).
   void _pickFile() {
     final input = html.FileUploadInputElement()
-      ..accept = 'image/*,audio/*,video/*,.pdf,.txt,.md,.json,.csv,.py,.js,.ts,.dart,.yaml,.yml'
+      ..accept = 'image/*,audio/*,video/*,'
+          '.pdf,.txt,.md,.json,.csv,.yaml,.yml,'
+          '.docx,.xlsx,.pptx,.doc,.xls,.ppt,'
+          '.odt,.ods,.odp,.rtf,.epub,'
+          '.html,.css,.xml,.sql,.toml,.ini,.env,.log,'
+          '.py,.js,.ts,.dart,.sh,.bash,.zsh,'
+          '.java,.kt,.c,.cpp,.h,.hpp,.rs,.go,.rb,.php,.swift,.lua'
       ..multiple = true;
     input.click();
-    input.onChange.listen((event) {
+    input.onChange.first.then((_) {
       final files = input.files;
       if (files == null) return;
       for (final file in files) {
-        _readFile(file);
+        _processFile(file);
       }
     });
   }
 
-  void _readFile(html.File file) {
+  /// Public: accept files from drag-and-drop (called by shell_page).
+  void addDroppedFiles(List<html.File> files) {
+    for (final file in files) {
+      _processFile(file);
+    }
+  }
+
+  /// Handle clipboard paste events (Ctrl+V for images).
+  void _handlePaste(html.ClipboardEvent event) {
+    if (!widget.enabled || _sending) return;
+    final items = event.clipboardData?.items;
+    if (items == null) return;
+    final itemCount = items.length ?? 0;
+    for (var i = 0; i < itemCount; i++) {
+      final item = items[i];
+      if (item == null) continue;
+      // Only process file/image items, not text
+      if (item.type != null && item.type!.startsWith('image/')) {
+        final file = item.getAsFile();
+        if (file != null) {
+          event.preventDefault();
+          _processFile(file);
+        }
+      }
+    }
+  }
+
+  /// Central file processing: validate → compress (if image) → read → add.
+  void _processFile(html.File file) {
+    // Check attachment count limit
+    if (_attachments.length >= AttachmentLimits.maxAttachments) {
+      _showAttachError('Max ${AttachmentLimits.maxAttachments} attachments');
+      return;
+    }
+
+    // Validate MIME + size
+    final error = MimeValidator.validate(file);
+    if (error != null) {
+      _showAttachError(error);
+      return;
+    }
+
+    setState(() => _processingCount++);
+
+    // Check if image needs compression
+    if (ImageCompressor.shouldCompress(file)) {
+      _compressAndAdd(file);
+    } else {
+      _readFileRaw(file);
+    }
+  }
+
+  /// Compress an image then add it as an attachment.
+  Future<void> _compressAndAdd(html.File file) async {
+    try {
+      final result = await ImageCompressor.compress(file);
+      if (result != null && mounted) {
+        setState(() {
+          _processingCount--;
+          _attachments.add(_AttachmentInfo(
+            name: file.name,
+            mimeType: result.mimeType,
+            base64: result.base64,
+            size: result.size,
+          ));
+        });
+        return;
+      }
+    } catch (_) {
+      // Compression failed — fall through to raw read
+    }
+    // Fallback to raw read
+    _readFileRaw(file);
+  }
+
+  /// Read a file as raw base64 (no compression).
+  void _readFileRaw(html.File file) {
     final reader = html.FileReader();
-    reader.onLoadEnd.listen((_) {
+    reader.onLoadEnd.first.then((_) {
+      if (!mounted) return;
       if (reader.result is String) {
         final dataUrl = reader.result as String;
-        // Data URL format: data:mime;base64,<data>
         final commaIndex = dataUrl.indexOf(',');
         if (commaIndex > 0) {
           final base64Data = dataUrl.substring(commaIndex + 1);
           setState(() {
+            _processingCount--;
             _attachments.add(_AttachmentInfo(
               name: file.name,
               mimeType: file.type,
@@ -145,7 +379,17 @@ class _PromptBarState extends ConsumerState<PromptBar> {
               size: file.size,
             ));
           });
+          return;
         }
+      }
+      // Read failed
+      setState(() => _processingCount--);
+      _showAttachError('Failed to read ${file.name}');
+    });
+    reader.onError.first.then((_) {
+      if (mounted) {
+        setState(() => _processingCount--);
+        _showAttachError('Error reading ${file.name}');
       }
     });
     reader.readAsDataUrl(file);
@@ -159,14 +403,26 @@ class _PromptBarState extends ConsumerState<PromptBar> {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
     final nameController = TextEditingController();
-    showDialog(
+    final contentController = TextEditingController(text: text);
+    DialogService.instance.showUnique(
       context: context,
+      id: 'save-template',
       builder: (ctx) {
         final t = ShellTokens.of(ctx);
+        void doSave() {
+          final name = nameController.text.trim();
+          final content = contentController.text.trim();
+          if (name.isNotEmpty && content.isNotEmpty) {
+            PromptTemplateStore.addCustom(
+              PromptTemplate(name: name, content: content),
+            );
+            Navigator.of(ctx).pop();
+          }
+        }
         return Dialog(
           shape: const RoundedRectangleBorder(),
           child: Container(
-            width: 300,
+            width: 400,
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: t.surfaceBase,
@@ -184,6 +440,7 @@ class _PromptBarState extends ConsumerState<PromptBar> {
                   autofocus: true,
                   decoration: InputDecoration(
                     hintText: 'template name',
+                    isDense: true,
                     enabledBorder: UnderlineInputBorder(
                       borderSide: BorderSide(color: t.border),
                     ),
@@ -191,15 +448,25 @@ class _PromptBarState extends ConsumerState<PromptBar> {
                       borderSide: BorderSide(color: t.accentPrimary),
                     ),
                   ),
-                  onSubmitted: (_) {
-                    final name = nameController.text.trim();
-                    if (name.isNotEmpty) {
-                      PromptTemplateStore.addCustom(
-                        PromptTemplate(name: name, content: text),
-                      );
-                      Navigator.of(ctx).pop();
-                    }
-                  },
+                  onSubmitted: (_) => doSave(),
+                ),
+                const SizedBox(height: 10),
+                Container(
+                  constraints: const BoxConstraints(maxHeight: 140),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: t.border, width: 0.5),
+                  ),
+                  child: TextField(
+                    controller: contentController,
+                    maxLines: 6,
+                    minLines: 3,
+                    style: TextStyle(fontSize: 12, color: t.fgPrimary),
+                    decoration: InputDecoration(
+                      hintText: 'template content...',
+                      border: InputBorder.none,
+                      contentPadding: const EdgeInsets.all(8),
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 12),
                 Row(
@@ -207,22 +474,20 @@ class _PromptBarState extends ConsumerState<PromptBar> {
                   children: [
                     GestureDetector(
                       onTap: () => Navigator.of(ctx).pop(),
-                      child: Text('cancel',
-                        style: TextStyle(fontSize: 11, color: t.fgMuted)),
+                      child: MouseRegion(
+                        cursor: SystemMouseCursors.click,
+                        child: Text('cancel',
+                          style: TextStyle(fontSize: 11, color: t.fgMuted)),
+                      ),
                     ),
                     const SizedBox(width: 12),
                     GestureDetector(
-                      onTap: () {
-                        final name = nameController.text.trim();
-                        if (name.isNotEmpty) {
-                          PromptTemplateStore.addCustom(
-                            PromptTemplate(name: name, content: text),
-                          );
-                          Navigator.of(ctx).pop();
-                        }
-                      },
-                      child: Text('save',
-                        style: TextStyle(fontSize: 11, color: t.accentPrimary)),
+                      onTap: doSave,
+                      child: MouseRegion(
+                        cursor: SystemMouseCursors.click,
+                        child: Text('save',
+                          style: TextStyle(fontSize: 11, color: t.accentPrimary)),
+                      ),
                     ),
                   ],
                 ),
@@ -231,12 +496,65 @@ class _PromptBarState extends ConsumerState<PromptBar> {
           ),
         );
       },
-    );
+    ).whenComplete(() {
+      nameController.dispose();
+      contentController.dispose();
+    });
   }
 
   // #2: Handle Shift+Enter for multi-line, Enter for send
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+    // Template panel keyboard navigation
+    if (_showTemplates) {
+      final key = event.logicalKey;
+      if (key == LogicalKeyboardKey.arrowDown || key == LogicalKeyboardKey.arrowUp) {
+        final filter = _controller.text.startsWith('/')
+            ? _controller.text.substring(1) : '';
+        final all = PromptTemplateStore.all();
+        final count = filter.isEmpty ? all.length : all.where((t) =>
+          t.name.toLowerCase().contains(filter.toLowerCase()) ||
+          t.category.toLowerCase().contains(filter.toLowerCase())
+        ).length;
+        if (count > 0) {
+          setState(() {
+            if (key == LogicalKeyboardKey.arrowDown) {
+              _activeTemplateIndex = (_activeTemplateIndex + 1) % count;
+            } else {
+              _activeTemplateIndex = (_activeTemplateIndex - 1 + count) % count;
+            }
+          });
+          _templateOverlay?.markNeedsBuild();
+        }
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.escape) {
+        _dismissedAtText = _controller.text; // Snapshot text at dismiss
+        _dismissAndCleanup();
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.enter) {
+        // Select the active template directly
+        final filter = _controller.text.startsWith('/')
+            ? _controller.text.substring(1) : '';
+        final all = PromptTemplateStore.all();
+        final filtered = filter.isEmpty ? all : all.where((t) =>
+          t.name.toLowerCase().contains(filter.toLowerCase()) ||
+          t.category.toLowerCase().contains(filter.toLowerCase())
+        ).toList();
+        if (filtered.isNotEmpty) {
+          final idx = _activeTemplateIndex.clamp(0, filtered.length - 1);
+          final content = filtered[idx].content;
+          _controller.text = content;
+          _controller.selection = TextSelection.collapsed(offset: content.length);
+          _dismissAndCleanup();
+          _focusNode.requestFocus();
+        }
+        return KeyEventResult.handled;
+      }
+    }
+
     if (event.logicalKey != LogicalKeyboardKey.enter) return KeyEventResult.ignored;
 
     final isShiftHeld = HardwareKeyboard.instance.isShiftPressed;
@@ -263,57 +581,83 @@ class _PromptBarState extends ConsumerState<PromptBar> {
     final t = ShellTokens.of(context);
     final isListening = _voiceController.isListening;
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // Template panel (above prompt bar)
-          if (_showTemplates)
-          Align(
-            alignment: Alignment.bottomLeft,
-            child: Padding(
-              padding: const EdgeInsets.only(left: 12, bottom: 4),
-              child: PromptTemplatePanel(
-                filter: _controller.text.startsWith('/')
-                    ? _controller.text.substring(1)
-                    : '',
-                onSelect: (content) {
-                  _controller.text = content;
-                  _controller.selection = TextSelection.collapsed(
-                    offset: content.length);
-                  setState(() => _showTemplates = false);
-                  _focusNode.requestFocus();
-                },
+    return CompositedTransformTarget(
+      link: _layerLink,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Attachment preview row (includes error + processing chips inline)
+          if (_attachments.isNotEmpty || _processingCount > 0 || _attachError != null)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                border: Border(top: BorderSide(color: t.border, width: 0.5)),
+              ),
+              child: SizedBox(
+                height: 32,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  children: [
+                    // Error chip (inline, same row height)
+                    if (_attachError != null)
+                      Container(
+                        margin: const EdgeInsets.only(right: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: t.statusError.withOpacity(0.08),
+                          border: Border.all(color: t.statusError.withOpacity(0.3), width: 0.5),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.warning_amber_rounded, size: 10, color: t.statusError),
+                            const SizedBox(width: 4),
+                            Text(_attachError!,
+                              style: TextStyle(fontSize: 9, color: t.statusError)),
+                          ],
+                        ),
+                      ),
+                    // Attachment chips
+                    for (var i = 0; i < _attachments.length; i++)
+                      _AttachmentChip(
+                        name: _attachments[i].name,
+                        mimeType: _attachments[i].mimeType,
+                        size: _attachments[i].size,
+                        tokens: t,
+                        theme: theme,
+                        onRemove: () => _removeAttachment(i),
+                      ),
+                    // Processing indicator chip
+                    if (_processingCount > 0)
+                      Container(
+                        margin: const EdgeInsets.only(right: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: t.surfaceCard,
+                          border: Border.all(color: t.border, width: 0.5),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox(
+                              width: 10, height: 10,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 1.5,
+                                color: t.accentPrimary,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Text('processing${_processingCount > 1 ? ' ($_processingCount)' : ''}',
+                              style: TextStyle(fontSize: 9, color: t.fgMuted)),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
               ),
             ),
-          ),
-        // Attachment preview row
-        if (_attachments.isNotEmpty)
+          // Main prompt bar
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            decoration: BoxDecoration(
-              border: Border(top: BorderSide(color: t.border, width: 0.5)),
-            ),
-            child: SizedBox(
-              height: 32,
-              child: ListView.builder(
-                scrollDirection: Axis.horizontal,
-                itemCount: _attachments.length,
-                itemBuilder: (context, index) {
-                  final a = _attachments[index];
-                  return _AttachmentChip(
-                    name: a.name,
-                    mimeType: a.mimeType,
-                    size: a.size,
-                    tokens: t,
-                    theme: theme,
-                    onRemove: () => _removeAttachment(index),
-                  );
-                },
-              ),
-            ),
-          ),
-        // Main prompt bar
-        Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
             border: Border(top: BorderSide(color: t.border, width: 0.5)),
@@ -373,7 +717,7 @@ class _PromptBarState extends ConsumerState<PromptBar> {
                           style: theme.textTheme.bodyLarge,
                           decoration: InputDecoration(
                             hintText: widget.enabled
-                                ? 'type / for templates'
+                                ? 'type / for prompt templates'
                                 : 'connecting...',
                             contentPadding: EdgeInsets.zero,
                             isDense: true,
@@ -433,13 +777,14 @@ class _PromptBarState extends ConsumerState<PromptBar> {
                           ),
                         ),
                       ),
-                  ],
-                ),
-              ],
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

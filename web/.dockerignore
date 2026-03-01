@@ -1,0 +1,8 @@
+.git/
+.env
+*.md
+supabase/.env.supabase
+agents/
+frontend/test/
+frontend/.dart_tool/
+frontend/build/

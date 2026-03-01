@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'dart:html' as html;
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show ChangeNotifier, kDebugMode, debugPrint;
 
 const _tokenKey = 'trinity_auth_token';
 const _roleKey = 'trinity_auth_role';
@@ -98,7 +98,9 @@ class AuthClient extends ChangeNotifier {
       if (permsJson != null && permsJson.isNotEmpty) {
         try {
           permissions = List<String>.from(jsonDecode(permsJson));
-        } catch (_) {}
+        } catch (e) {
+          if (kDebugMode) debugPrint('[Auth] Failed to parse stored permissions: $e');
+        }
       }
       _state = AuthState(
         token: token,

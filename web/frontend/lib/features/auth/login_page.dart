@@ -88,9 +88,16 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         'width=500,height=600,scrollbars=yes,resizable=yes');
 
       // Listen for the callback message from the popup
+      // Security: validate the origin of the postMessage to prevent token injection
+      final expectedOrigin = Uri.parse(authClient.authServiceBaseUrl).origin;
       late final html.EventListener messageHandler;
       messageHandler = (html.Event event) {
         if (event is html.MessageEvent) {
+          // Validate origin matches our auth service
+          final eventOrigin = event.origin;
+          if (eventOrigin.isNotEmpty && eventOrigin != expectedOrigin && eventOrigin != html.window.location!.origin) {
+            return; // Reject messages from unexpected origins
+          }
           final data = event.data;
           if (data is Map && data.containsKey('access_token')) {
             final accessToken = data['access_token'] as String;

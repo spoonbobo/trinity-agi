@@ -104,6 +104,27 @@ Any component can specify `"weight"` for flex sizing in Row/Column:
 - After calling canvas_ui, reply briefly in chat -- do NOT repeat the content as text
 - Use `deleteSurface` to clear a surface: `{"deleteSurface":{"surfaceId":"main"}}`
 
+### Displaying Generated Images
+
+When you generate an image (e.g., via nano-banana-pro, openai-image-gen, or any tool that saves an image file to the workspace), you MUST do **both** of these:
+
+1. **Show it on the Canvas** -- call `canvas_ui` with an A2UI `Image` component using the media serving URL:
+
+```
+{"surfaceUpdate":{"surfaceId":"main","components":[{"id":"root","component":{"Column":{"children":{"explicitList":["title","img"]}}}},{"id":"title","component":{"Text":{"text":{"literalString":"Generated Image"},"usageHint":"h2"}}},{"id":"img","component":{"Image":{"url":{"literalString":"/__openclaw__/media/<workspace-relative-path>"}}}}]}}
+{"beginRendering":{"surfaceId":"main","root":"root"}}
+```
+
+2. **Include a markdown image link in your chat reply** so the image also appears inline in the chat:
+
+```markdown
+![Generated image](/__openclaw__/media/<workspace-relative-path>)
+```
+
+**URL format:** The media serving endpoint is `/__openclaw__/media/` followed by the workspace-relative path. For example, if the image is saved to the workspace at `output.png`, the URL is `/__openclaw__/media/output.png`. If the `MEDIA:` line from the script says `/home/node/.openclaw/workspace/my-image.png`, strip the workspace prefix to get `my-image.png`, then the URL is `/__openclaw__/media/my-image.png`.
+
+**Important:** Always use the `/__openclaw__/media/` URL -- never use `file://` paths or absolute filesystem paths in image URLs. The browser cannot access local filesystem paths.
+
 ---
 
 ## System Architecture
@@ -350,6 +371,59 @@ MaterialApp (TrinityApp)
 | languageProvider | main.dart | StateProvider<AppLanguage> |
 | toastProvider | core/toast_provider.dart | StateNotifierProvider |
 
+### Services (Non-Riverpod Singletons)
+
+| Service | Location | Access | Purpose |
+|---------|----------|--------|---------|
+| DialogService | core/dialog_service.dart | `DialogService.instance` | Prevents duplicate dialogs from stacking |
+
+### DialogService Pattern
+
+**MANDATORY: All `showDialog` calls in the shell MUST go through `DialogService.instance.showUnique()`.** Never call `showDialog()` directly for top-level dialogs. This prevents duplicate dialogs from stacking when users double-click, rapid-fire keyboard shortcuts, or trigger the same dialog from multiple entry points.
+
+```dart
+// CORRECT
+DialogService.instance.showUnique(
+  context: context,
+  id: 'settings',               // unique string ID per dialog type
+  builder: (_) => const SettingsDialog(),
+);
+
+// WRONG -- will stack duplicates
+showDialog(
+  context: context,
+  builder: (_) => const SettingsDialog(),
+);
+```
+
+**Rules:**
+- Each dialog type gets a unique string `id` (e.g., `'settings'`, `'command-palette'`, `'template-manager'`)
+- If a dialog with the same `id` is already open, `showUnique` is a no-op (returns `Future.value(null)`)
+- The `id` is automatically released when the dialog closes (via `whenComplete`)
+- Two entry points opening the same dialog should use the same `id` (e.g., "manage" and "+ new" both use `'template-manager'`)
+- Sub-dialogs inside an already-open dialog (e.g., inspect panels inside skills dialog) may use raw `showDialog` since they are contextually gated
+
+**Registered dialog IDs:**
+
+| ID | Dialog | Entry points |
+|----|--------|-------------|
+| `command-palette` | CommandPalette | Ctrl+K, status bar ctrl+k label |
+| `skills` | SkillsDialog | Status bar "skills" |
+| `memory` | MemoryDialog | Status bar "memory" |
+| `automations` | AutomationsDialog | Status bar "automations" |
+| `settings` | SettingsDialog | Status bar "settings", command palette |
+| `admin` | AdminDialog | Status bar "admin" |
+| `template-manager` | PromptTemplateManagerDialog | Template panel "manage" link, "+ new" link |
+| `save-template` | Save-as-template dialog | Prompt bar bookmark icon |
+
+### Overlay Conventions
+
+Widgets that float outside their parent bounds (e.g., the prompt template panel above the prompt bar) must use Flutter's `Overlay` system, not `Stack` + `Positioned` with `clipBehavior: Clip.none`. The `Stack` approach causes pointer events to be clipped even when visual rendering is not.
+
+**Pattern:** `CompositedTransformTarget` on the anchor widget + `OverlayEntry` with `CompositedTransformFollower` for the floating content. The floating content must be wrapped in `Material(color: Colors.transparent)` to prevent yellow debug underlines (missing `DefaultTextStyle` ancestor).
+
+See `prompt_bar.dart` `_showTemplateOverlay()` for the reference implementation.
+
 ### Features
 
 | Feature | Files | Opens from |
@@ -359,7 +433,7 @@ MaterialApp (TrinityApp)
 | Canvas (A2UI renderer) | canvas/a2ui_renderer.dart | Always visible (+ export toolbar) |
 | Governance (approvals) | governance/approval_panel.dart | Auto on approval events |
 | Prompt bar + voice + files | prompt_bar/prompt_bar.dart | Always visible |
-| Prompt templates | prompt_bar/prompt_templates.dart | Bookmark icon in prompt bar |
+| Prompt templates | prompt_bar/prompt_templates.dart, prompt_bar/prompt_template_manager.dart | Type "/" in prompt bar; manage/+new links in panel; bookmark icon to save |
 | Session management | sessions/session_drawer.dart | Hamburger menu in status bar |
 | Command palette | command_palette/command_palette.dart | Ctrl+K |
 | Notification center | notifications/notification_center.dart | Bell icon in status bar |
@@ -497,7 +571,11 @@ Then hard-refresh browser: Ctrl+Shift+R.
 - Hamburger menu opens the session drawer (left panel) for multi-session management
 - Bell icon opens the notification center dropdown (top-right)
 - Ctrl+K opens the command palette for quick navigation
-- Prompt bar has: attach file (paperclip), templates (bookmark), text input, save-as-template, voice, abort
+- Prompt bar has: attach file (paperclip), text input (hint: "type / for prompt templates"), save-as-template (bookmark), voice, abort
+- Typing "/" in prompt bar opens template overlay panel (floats above via Overlay, no layout shift); typing filters templates live; backspace past "/" closes it
+- Template panel: header ("prompt templates" + "manage" link), filtered list, footer ("+ new" link); "manage" and "+ new" dismiss overlay first then open PromptTemplateManagerDialog via DialogService
+- Template manager dialog: full CRUD for custom templates with multi-line content editor, category filter (all/built-in/custom), pagination, import/export as JSON
+- User message bubbles have a hover-only "copy" button (same pattern as assistant bubbles)
 - File attachments shown as chips below prompt bar; images render as thumbnails in chat
 - Canvas has an export toolbar (top-right): download PNG, download JSON, copy as image
 - CodeEditor component available for syntax-highlighted code blocks in A2UI surfaces
@@ -508,6 +586,7 @@ Then hard-refresh browser: Ctrl+Shift+R.
 - Skills view: grouped by ready, not ready, clawhub, templates
 - Admin panel: 5 tabs (users, audit, health, rbac, sessions), visible only to admin/superadmin
 - Responsive layout: mobile (<600px) stacks chat/canvas with tab switcher; tablet (600-1024px) narrower split; desktop full split
-- All dialogs: zero border-radius, 0.5px borders, monospace font
+- All dialogs: zero border-radius, 0.5px borders, monospace font; opened via DialogService.instance.showUnique() to prevent stacking
 - Interactive elements: GestureDetector + Text (no Material buttons in shell)
+- Overlays (floating panels): use CompositedTransformTarget/Follower + OverlayEntry + Material wrapper; never Stack+Positioned for hit-testable floating content
 - SSO login via Keycloak is active (popup OAuth flow)

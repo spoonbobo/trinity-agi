@@ -1,7 +1,7 @@
 {
   "meta": {
     "lastTouchedVersion": "2026.2.26",
-    "lastTouchedAt": "2026-02-27T18:02:00.612Z"
+    "lastTouchedAt": "2026-03-01T04:06:04.338Z"
   },
   "wizard": {
     "lastRunAt": "2026-02-27T18:02:00.604Z",
@@ -9,17 +9,36 @@
     "lastRunCommand": "configure",
     "lastRunMode": "local"
   },
+  "acp": {
+    "enabled": true,
+    "dispatch": {
+      "enabled": true
+    },
+    "backend": "acpx",
+    "defaultAgent": "opencode",
+    "allowedAgents": [
+      "pi",
+      "claude",
+      "codex",
+      "opencode",
+      "gemini"
+    ],
+    "maxConcurrentSessions": 8,
+    "runtime": {
+      "ttlMinutes": 120
+    }
+  },
   "models": {},
   "agents": {
     "defaults": {
       "model": {
-        "primary": "opencode/minimax-m2.5",
+        "primary": "opencode/kimi-k2.5",
         "fallbacks": [
           "opencode/claude-opus-4-6"
         ]
       },
       "imageModel": {
-        "primary": "opencode/claude-opus-4-6"
+        "primary": "opencode/kimi-k2.5"
       },
       "models": {
         "opencode/minimax-m2.5": {
@@ -27,7 +46,8 @@
         },
         "opencode/claude-opus-4-6": {
           "alias": "Claude Opus 4.6"
-        }
+        },
+        "opencode/kimi-k2.5": {}
       },
       "workspace": "/home/node/.openclaw/workspace",
       "sandbox": {
@@ -97,6 +117,13 @@
         "chatCompletions": {
           "enabled": true
         }
+      }
+    }
+  },
+  "plugins": {
+    "entries": {
+      "acpx": {
+        "enabled": true
       }
     }
   }
