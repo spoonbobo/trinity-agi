@@ -2,3 +2,7 @@
 *.log
 nul
 supabase/.env.supabase
+
+# Agent runtime files containing secrets (API keys, auth tokens)
+agents/main/auth-profiles.json
+agents/main/models.json

@@ -1,0 +1,8 @@
+{
+  "name": "Hourly Model Status",
+  "description": "Check model availability and response times every hour",
+  "schedule": "0 * * * *",
+  "command": "Check model status: probe the current default model with a simple test query. If it fails or is slow (>10s), switch to the first available fallback and notify in main chat.",
+  "session": "isolated",
+  "enabled": false
+}

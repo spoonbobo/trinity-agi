@@ -50,6 +50,9 @@ Call the `canvas_ui` tool with a `jsonl` parameter containing A2UI v0.8 JSONL. E
 - Slider: `{"Slider":{"min":0,"max":100,"value":{"path":"/settings/volume"}}}` (writes to data model on change)
 - Toggle: `{"Toggle":{"label":{"literalString":"Dark mode"},"value":{"path":"/settings/dark"}}}` (writes to data model on change)
 
+**Code:**
+- CodeEditor: `{"CodeEditor":{"code":{"literalString":"print('hello')"},"language":{"literalString":"python"},"editable":false,"lineNumbers":true}}` (syntax-highlighted code block with copy button; set editable=true + code path binding for user-editable code; writes to data model at bound path on change)
+
 **Containers:**
 - Card: `{"Card":{"child":"content-id"}}` (also accepts: `{"children":{"explicitList":["id1","id2"]}}`)
 - Modal: `{"Modal":{"entryPointChild":"trigger-btn-id","contentChild":"dialog-content-id"}}` (clicking the entryPoint opens the contentChild in a dialog overlay)
@@ -232,8 +235,8 @@ Guest flow: `POST /auth/guest` issues a limited JWT (1hr, role=guest, hardcoded 
 | GET | /auth/users | users.list | List all users with roles |
 | POST | /auth/users/:id/role | users.manage | Assign role (guest/user/admin) |
 | GET | /auth/users/audit | audit.read | Paginated audit log |
-| GET | /auth/roles/permissions | users.list | Role-permission matrix |
-| PUT | /auth/roles/:role/permissions | users.manage | Update role permissions |
+| GET | /auth/users/roles/permissions | users.list | Role-permission matrix |
+| PUT | /auth/users/roles/:role/permissions | users.manage | Update role permissions |
 
 ---
 
@@ -264,6 +267,49 @@ Commands execute via `docker exec trinity-openclaw openclaw <cmd>`.
 
 ---
 
+## Automations
+
+The shell's Automations dialog exposes 4 sub-tabs. Here is how each works:
+
+### Crons
+
+Scheduled tasks that run on a cron schedule. Managed via the `cron` CLI commands:
+- `cron list [--json]` -- list all cron jobs
+- `cron add "<schedule>" "<command>" [--session isolated|main] [--delete-after-run] [--name "<name>"]` -- create a cron
+- `cron enable <id>` / `cron disable <id>` -- toggle a cron
+- `cron delete <id>` -- remove a cron
+- `cron run <id>` -- trigger immediately
+
+Cron templates are available in `/home/node/.openclaw/cron-templates/` as JSON files.
+
+### Hooks
+
+Event-driven automations that fire when specific gateway events occur (e.g., new message, session start, model change). Managed via:
+- `hooks list [--json]` -- list all hooks with their events, source, and enabled status
+- `hooks info <id>` -- show hook details (trigger events, conditions, eligibility)
+- `hooks enable <id>` / `hooks disable <id>` -- toggle a hook
+- `hooks check [--json]` -- validate all hooks are correctly configured
+
+Hooks are defined in skill SKILL.md files via `hooks:` frontmatter or created via the gateway API.
+
+### Webhooks
+
+HTTP endpoints that external services can call to trigger agent actions. Three types:
+- **Wake endpoint**: `POST /__openclaw__/webhook/wake` -- wakes the agent with a message
+- **Agent endpoint**: `POST /__openclaw__/webhook/agent` -- sends directly to the agent
+- **Mapped webhooks**: Custom endpoints mapped to specific commands or sessions
+
+The webhooks tab shows endpoint URLs and channel health status.
+
+### Polls
+
+Send interactive polls via messaging channels (WhatsApp, Telegram, etc.):
+- `message poll --channel <channel> --to <recipient> --question "<text>" --options "<a>,<b>,<c>" [--multi-select]`
+
+The polls tab provides a form UI for composing and sending polls.
+
+---
+
 ## Frontend Architecture
 
 ### Stack
@@ -275,14 +321,19 @@ Flutter Web (SDK >=3.2.0), Riverpod state management, monospace dark aesthetic.
 ```
 MaterialApp (TrinityApp)
   AuthGuard
-    LoginPage (if no token)
+    LoginPage (if no token) -- email/password, SSO via Keycloak, guest
     ShellPage (if authenticated)
-      StatusBar: [dot] memory --- setup skills automations [admin] settings
+      StatusBar: [hamburger] [dot] [session] memory --- skills automations [admin] settings [bell] [ctrl+k]
       Row:
-        ChatStreamView (flex:6)
-        A2UIRendererPanel (flex:4)
+        SessionDrawer (left, toggleable)
+        ChatStreamView (flex:6) -- supports file attachments in user bubbles
+        DraggableResizer
+        A2UIRendererPanel (flex:4) -- with export toolbar (PNG/JSON/copy)
         ApprovalPanel (flex:4, conditional)
-      PromptBar
+      PromptBar -- file attach, templates, voice, abort
+      CommandPalette (Ctrl+K overlay)
+      NotificationCenter (bell dropdown)
+  Mobile (<600px): stacked panels with chat/canvas tab switcher
 ```
 
 ### Providers (Riverpod)
@@ -292,6 +343,8 @@ MaterialApp (TrinityApp)
 | authClientProvider | core/providers.dart | ChangeNotifierProvider<AuthClient> |
 | gatewayClientProvider | core/providers.dart | ChangeNotifierProvider<GatewayClient> |
 | terminalClientProvider | core/providers.dart | ChangeNotifierProvider<TerminalProxyClient> |
+| activeSessionProvider | core/providers.dart | StateProvider<String> |
+| notificationProvider | notifications/notification_center.dart | ChangeNotifierProvider<NotificationState> |
 | themeModeProvider | main.dart | StateProvider<ThemeMode> |
 | fontFamilyProvider | main.dart | StateProvider<AppFontFamily> |
 | languageProvider | main.dart | StateProvider<AppLanguage> |
@@ -303,9 +356,13 @@ MaterialApp (TrinityApp)
 |---------|-------|------------|
 | Login (email/SSO/guest) | auth/login_page.dart | AuthGuard |
 | Chat + streaming | chat/chat_stream.dart | Always visible |
-| Canvas (A2UI renderer) | canvas/a2ui_renderer.dart | Always visible |
+| Canvas (A2UI renderer) | canvas/a2ui_renderer.dart | Always visible (+ export toolbar) |
 | Governance (approvals) | governance/approval_panel.dart | Auto on approval events |
-| Prompt bar + voice | prompt_bar/prompt_bar.dart | Always visible |
+| Prompt bar + voice + files | prompt_bar/prompt_bar.dart | Always visible |
+| Prompt templates | prompt_bar/prompt_templates.dart | Bookmark icon in prompt bar |
+| Session management | sessions/session_drawer.dart | Hamburger menu in status bar |
+| Command palette | command_palette/command_palette.dart | Ctrl+K |
+| Notification center | notifications/notification_center.dart | Bell icon in status bar |
 | Setup wizard | onboarding/onboarding_wizard.dart | Status bar "setup" |
 | Skills | catalog/skills_cron_dialog.dart | Status bar "skills" |
 | Automations | automations/automations_dialog.dart | Status bar "automations" |
@@ -436,12 +493,21 @@ Then hard-refresh browser: Ctrl+Shift+R.
 
 ## Current UI Conventions (2026)
 
-- Status bar: tiny text toggles (memory | setup | skills | automations | admin | settings) with minimal chrome
+- Status bar: [hamburger] [dot] [session badge] memory --- skills automations [admin] settings [bell] [ctrl+k]
+- Hamburger menu opens the session drawer (left panel) for multi-session management
+- Bell icon opens the notification center dropdown (top-right)
+- Ctrl+K opens the command palette for quick navigation
+- Prompt bar has: attach file (paperclip), templates (bookmark), text input, save-as-template, voice, abort
+- File attachments shown as chips below prompt bar; images render as thumbnails in chat
+- Canvas has an export toolbar (top-right): download PNG, download JSON, copy as image
+- CodeEditor component available for syntax-highlighted code blocks in A2UI surfaces
 - Empty states use small centered icons instead of labels where possible
 - Setup wizard: welcome, status, configure, terminal (no catalog step)
 - Skills: standalone dialog opened from status bar "skills" toggle
 - Automations: standalone dialog with 4 sub-tabs (crons, hooks, webhooks, polls) opened from status bar "automations" toggle
 - Skills view: grouped by ready, not ready, clawhub, templates
 - Admin panel: 5 tabs (users, audit, health, rbac, sessions), visible only to admin/superadmin
+- Responsive layout: mobile (<600px) stacks chat/canvas with tab switcher; tablet (600-1024px) narrower split; desktop full split
 - All dialogs: zero border-radius, 0.5px borders, monospace font
 - Interactive elements: GestureDetector + Text (no Material buttons in shell)
+- SSO login via Keycloak is active (popup OAuth flow)

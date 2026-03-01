@@ -76,6 +76,76 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     }
   }
 
+  Future<void> _loginWithSSO() async {
+    setState(() => _loading = true);
+
+    try {
+      final authClient = ref.read(authClientProvider);
+      final ssoUrl = authClient.getKeycloakLoginUrl();
+
+      // Open SSO URL in a popup window
+      final popup = html.window.open(ssoUrl, 'sso_login',
+        'width=500,height=600,scrollbars=yes,resizable=yes');
+
+      // Listen for the callback message from the popup
+      late final html.EventListener messageHandler;
+      messageHandler = (html.Event event) {
+        if (event is html.MessageEvent) {
+          final data = event.data;
+          if (data is Map && data.containsKey('access_token')) {
+            final accessToken = data['access_token'] as String;
+            html.window.removeEventListener('message', messageHandler);
+            _completeSSOLogin(accessToken);
+          } else if (data is String && data.startsWith('sso_token:')) {
+            final accessToken = data.substring('sso_token:'.length);
+            html.window.removeEventListener('message', messageHandler);
+            _completeSSOLogin(accessToken);
+          }
+        }
+      };
+      html.window.addEventListener('message', messageHandler);
+
+      // Also poll the popup URL for hash fragments (fallback for redirects)
+      _pollSSOPopup(popup, messageHandler);
+    } catch (e) {
+      final errMsg = e.toString().replaceAll('Exception: ', '');
+      ToastService.showError(context, errMsg);
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  void _pollSSOPopup(html.WindowBase? popup, html.EventListener messageHandler) {
+    if (popup == null) {
+      setState(() => _loading = false);
+      return;
+    }
+    // Poll every 500ms to check if popup closed or has a token in URL
+    Future.doWhile(() async {
+      await Future.delayed(const Duration(milliseconds: 500));
+      try {
+        if (popup.closed == true) {
+          html.window.removeEventListener('message', messageHandler);
+          if (mounted) setState(() => _loading = false);
+          return false; // Stop polling
+        }
+      } catch (_) {}
+      return mounted && _loading; // Keep polling while loading
+    });
+  }
+
+  Future<void> _completeSSOLogin(String accessToken) async {
+    try {
+      final authClient = ref.read(authClientProvider);
+      await authClient.resolveSessionFromToken(accessToken);
+      widget.onLoginSuccess?.call();
+    } catch (e) {
+      final errMsg = e.toString().replaceAll('Exception: ', '');
+      ToastService.showError(context, errMsg);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
   Future<void> _loginAsGuest() async {
     setState(() {
       _loading = true;
@@ -211,19 +281,13 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               const SizedBox(height: 16),
               // SSO
               GestureDetector(
-                onTap: _loading
-                    ? null
-                    : () {
-                        final authClient = ref.read(authClientProvider);
-                        final url = authClient.getKeycloakLoginUrl();
-                        debugPrint('SSO URL: $url (not yet implemented)');
-                      },
-                child: Tooltip(
-                  message: 'SSO integration coming soon',
+                onTap: _loading ? null : _loginWithSSO,
+                child: MouseRegion(
+                  cursor: _loading ? SystemMouseCursors.basic : SystemMouseCursors.click,
                   child: Text(
                     'sign in with SSO',
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      color: t.fgDisabled,
+                      color: _loading ? t.fgDisabled : t.accentSecondary,
                     ),
                   ),
                 ),

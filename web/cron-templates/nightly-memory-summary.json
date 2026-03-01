@@ -1,0 +1,8 @@
+{
+  "name": "Nightly Memory Summary",
+  "description": "Summarize the day's conversations and update MEMORY.md every night at 11pm",
+  "schedule": "0 23 * * *",
+  "command": "Review today's chat sessions. Summarize key decisions, action items, and notable events. Append a dated summary section to MEMORY.md under '## Daily Log'. Keep it concise (3-5 bullet points max).",
+  "session": "isolated",
+  "enabled": false
+}

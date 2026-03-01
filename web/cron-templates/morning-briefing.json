@@ -1,0 +1,8 @@
+{
+  "name": "Morning Briefing",
+  "description": "Prepare a morning briefing dashboard at 7:30am with weather, calendar, and pending tasks",
+  "schedule": "30 7 * * *",
+  "command": "Build a morning briefing dashboard on the canvas: show current weather (if weather skill available), list any pending cron results, show system health status, and display current priorities from MEMORY.md.",
+  "session": "main",
+  "enabled": false
+}

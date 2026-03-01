@@ -211,6 +211,11 @@ class AuthClient extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Resolve session from an SSO access token (used after OAuth callback).
+  Future<void> resolveSessionFromToken(String accessToken) async {
+    await _resolveSession(accessToken);
+  }
+
   void logout() {
     _state = const AuthState();
     html.window.localStorage.remove(_tokenKey);

@@ -1,0 +1,8 @@
+{
+  "name": "Daily Health Check",
+  "description": "Run a comprehensive system health check every morning at 8am",
+  "schedule": "0 8 * * *",
+  "command": "Run a health check: check gateway status, database connectivity, service health, and disk usage. Report any issues to the main chat. If anything is unhealthy, suggest fixes.",
+  "session": "isolated",
+  "enabled": false
+}

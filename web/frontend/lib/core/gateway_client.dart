@@ -204,6 +204,36 @@ class GatewayClient extends ChangeNotifier {
     if (!_disposed) _eventController.add(event);
   }
 
+  /// List all sessions from the gateway.
+  Future<WsResponse> listSessions() {
+    return sendRequest('sessions.list', {});
+  }
+
+  /// Send a chat message with optional file attachments.
+  Future<WsResponse> sendChatMessageWithAttachments(
+    String message, {
+    String sessionKey = 'main',
+    List<Map<String, dynamic>>? attachments,
+  }) {
+    if (!_disposed) {
+      _eventController.add(WsEvent(
+        event: 'chat',
+        payload: {
+          'type': 'message',
+          'role': 'user',
+          'content': message,
+          if (attachments != null) 'attachments': attachments,
+        },
+      ));
+    }
+    return sendRequest('chat.send', {
+      'message': message,
+      'sessionKey': sessionKey,
+      'idempotencyKey': _uuid.v4(),
+      if (attachments != null) 'attachments': attachments,
+    });
+  }
+
   void _onError(dynamic error) {
     _state = ConnectionState.error;
     notifyListeners();

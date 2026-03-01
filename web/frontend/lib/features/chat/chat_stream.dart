@@ -9,6 +9,12 @@ import '../../core/gateway_client.dart' as gw;
 import '../../models/ws_frame.dart';
 import '../../core/providers.dart';
 
+String _formatTimestamp(DateTime ts) {
+  final h = ts.hour.toString().padLeft(2, '0');
+  final m = ts.minute.toString().padLeft(2, '0');
+  return '$h:$m';
+}
+
 /// A single entry in the chat stream.
 class ChatEntry {
   final String role; // 'user', 'assistant', 'tool', 'system'
@@ -16,12 +22,14 @@ class ChatEntry {
   final String? toolName;
   final bool isStreaming;
   final DateTime timestamp;
+  final List<Map<String, dynamic>>? attachments;
 
   ChatEntry({
     required this.role,
     required this.content,
     this.toolName,
     this.isStreaming = false,
+    this.attachments,
     DateTime? timestamp,
   }) : timestamp = timestamp ?? DateTime.now();
 
@@ -30,6 +38,7 @@ class ChatEntry {
         content: content ?? this.content,
         toolName: toolName,
         isStreaming: isStreaming ?? this.isStreaming,
+        attachments: attachments,
         timestamp: timestamp,
       );
 }
@@ -47,6 +56,7 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
   StreamSubscription<WsEvent>? _chatSub;
   bool _agentThinking = false;
   bool _showScrollToBottom = false;
+  String _currentSession = 'main';
 
   @override
   void initState() {
@@ -84,10 +94,17 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
 
   Future<void> _loadHistory() async {
     final client = ref.read(gatewayClientProvider);
+    final sessionKey = ref.read(activeSessionProvider);
+    debugPrint('[Chat] _loadHistory sessionKey=$sessionKey');
     try {
-      final response = await client.getChatHistory(limit: 50);
+      final response = await client.getChatHistory(sessionKey: sessionKey, limit: 50);
+      debugPrint('[Chat] history ok=${response.ok} payload keys=${response.payload?.keys.toList()}');
       if (response.ok && response.payload != null) {
-        final messages = response.payload?['messages'];
+        // Try 'messages' first, fall back to 'history' or 'entries'
+        final messages = response.payload?['messages']
+            ?? response.payload?['history']
+            ?? response.payload?['entries'];
+        debugPrint('[Chat] messages type=${messages.runtimeType} count=${messages is List ? messages.length : 'N/A'}');
         if (messages is List) {
           setState(() {
             _entries.clear();
@@ -104,14 +121,15 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
               ));
             }
           });
+          debugPrint('[Chat] loaded ${_entries.length} entries');
           // Seed _lastCanvasSurface from history so the poll doesn't
           // re-render stale surfaces from previous runs.
           _seedLastCanvasSurface(messages);
           _scrollToBottom();
         }
       }
-    } catch (_) {
-      // History fetch may fail on first connect before any messages exist
+    } catch (e) {
+      debugPrint('[Chat] _loadHistory error: $e');
     }
   }
 
@@ -155,8 +173,19 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
 
       if (type == 'message' && payload['role'] == 'user') {
         final content = payload['content'] as String? ?? '';
+        final rawAttachments = payload['attachments'];
+        List<Map<String, dynamic>>? attachments;
+        if (rawAttachments is List) {
+          attachments = rawAttachments
+              .whereType<Map<String, dynamic>>()
+              .toList();
+        }
         setState(() {
-          _entries.add(ChatEntry(role: 'user', content: content));
+          _entries.add(ChatEntry(
+            role: 'user',
+            content: content,
+            attachments: attachments,
+          ));
         });
       } else if (state == 'delta' || state == 'final') {
         final message = payload['message'];
@@ -408,6 +437,15 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
     final theme = Theme.of(context);
     final t = ShellTokens.of(context);
 
+    // Reload history when session changes
+    final sessionKey = ref.watch(activeSessionProvider);
+    if (sessionKey != _currentSession) {
+      _currentSession = sessionKey;
+      _entries.clear();
+      _agentThinking = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadHistory());
+    }
+
     // #14 (chat): Better empty state with hint
     if (_entries.isEmpty && !_agentThinking) {
       return Center(
@@ -551,12 +589,68 @@ class _UserBubble extends StatelessWidget {
                 color: t.accentPrimary.withOpacity(0.08),
                 border: Border.all(color: t.accentPrimary.withOpacity(0.18), width: 0.5),
               ),
-              child: SelectableText(
-                entry.content,
-                style: theme.textTheme.bodyLarge?.copyWith(
-                  color: t.fgPrimary,
-                  height: 1.5,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  if (entry.attachments != null && entry.attachments!.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Wrap(
+                        spacing: 4,
+                        runSpacing: 4,
+                        alignment: WrapAlignment.end,
+                        children: entry.attachments!.map((a) {
+                          final mime = a['mimeType'] as String? ?? '';
+                          final name = a['name'] as String? ?? 'file';
+                          if (mime.startsWith('image/') && a['base64'] != null) {
+                            return Container(
+                              constraints: const BoxConstraints(maxWidth: 180, maxHeight: 120),
+                              decoration: BoxDecoration(
+                                border: Border.all(color: t.border, width: 0.5),
+                              ),
+                              child: Image.memory(
+                                base64Decode(a['base64'] as String),
+                                fit: BoxFit.cover,
+                              ),
+                            );
+                          }
+                          return Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: t.surfaceCard,
+                              border: Border.all(color: t.border, width: 0.5),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  mime.startsWith('audio/') ? Icons.audiotrack
+                                    : mime.startsWith('video/') ? Icons.videocam
+                                    : Icons.insert_drive_file,
+                                  size: 10, color: t.fgMuted),
+                                const SizedBox(width: 4),
+                                Text(name,
+                                  style: TextStyle(fontSize: 9, color: t.fgTertiary)),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  if (entry.content.isNotEmpty && entry.content != '[attachment]')
+                    SelectableText(
+                      entry.content,
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        color: t.fgPrimary,
+                        height: 1.5,
+                      ),
+                    ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _formatTimestamp(entry.timestamp),
+                    style: TextStyle(fontSize: 9, color: t.fgMuted),
+                  ),
+                ],
               ),
             ),
           ),
@@ -566,10 +660,26 @@ class _UserBubble extends StatelessWidget {
   }
 }
 
-class _AssistantBubble extends StatelessWidget {
+class _AssistantBubble extends StatefulWidget {
   final ChatEntry entry;
   final bool isNewSender;
   const _AssistantBubble({required this.entry, this.isNewSender = true});
+
+  @override
+  State<_AssistantBubble> createState() => _AssistantBubbleState();
+}
+
+class _AssistantBubbleState extends State<_AssistantBubble> {
+  bool _hovering = false;
+  bool _copied = false;
+
+  void _copyMessage() {
+    Clipboard.setData(ClipboardData(text: widget.entry.content));
+    setState(() => _copied = true);
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _copied = false);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -577,86 +687,125 @@ class _AssistantBubble extends StatelessWidget {
     final t = ShellTokens.of(context);
     final baseStyle = theme.textTheme.bodyLarge ?? const TextStyle();
 
-    return Padding(
-      padding: EdgeInsets.only(
-        top: isNewSender ? 14 : 3,
-        bottom: 1,
-        right: 48,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (isNewSender)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 4, left: 2),
-              child: Text(
-                'trinity',
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: t.fgTertiary,
-                  fontSize: 10,
-                  letterSpacing: 0.5,
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovering = true),
+      onExit: (_) => setState(() => _hovering = false),
+      child: Padding(
+        padding: EdgeInsets.only(
+          top: widget.isNewSender ? 14 : 3,
+          bottom: 1,
+          right: 48,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (widget.isNewSender)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4, left: 2),
+                child: Text(
+                  'trinity',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: t.fgTertiary,
+                    fontSize: 10,
+                    letterSpacing: 0.5,
+                  ),
                 ),
               ),
-            ),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              color: t.surfaceCard,
-              border: Border.all(color: t.border, width: 0.5),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                MarkdownBody(
-                  data: entry.content,
-                  selectable: true,
-                  styleSheet: MarkdownStyleSheet(
-                    p: baseStyle,
-                    h1: baseStyle.copyWith(fontSize: 16, fontWeight: FontWeight.bold, color: t.fgPrimary),
-                    h2: baseStyle.copyWith(fontSize: 15, fontWeight: FontWeight.bold, color: t.fgPrimary),
-                    h3: baseStyle.copyWith(fontSize: 14, fontWeight: FontWeight.bold),
-                    code: baseStyle.copyWith(fontSize: 13, color: t.accentPrimary, backgroundColor: t.surfaceCodeInline),
-                    codeblockDecoration: BoxDecoration(
-                      color: t.surfaceBase,
-                      border: Border(left: BorderSide(color: t.border, width: 2)),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: t.surfaceCard,
+                border: Border.all(color: t.border, width: 0.5),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  MarkdownBody(
+                    data: widget.entry.content,
+                    selectable: true,
+                    styleSheet: MarkdownStyleSheet(
+                      p: baseStyle,
+                      h1: baseStyle.copyWith(fontSize: 16, fontWeight: FontWeight.bold, color: t.fgPrimary),
+                      h2: baseStyle.copyWith(fontSize: 15, fontWeight: FontWeight.bold, color: t.fgPrimary),
+                      h3: baseStyle.copyWith(fontSize: 14, fontWeight: FontWeight.bold),
+                      code: baseStyle.copyWith(fontSize: 13, color: t.accentPrimary, backgroundColor: t.surfaceCodeInline),
+                      codeblockDecoration: BoxDecoration(
+                        color: t.surfaceBase,
+                        border: Border(left: BorderSide(color: t.border, width: 2)),
+                      ),
+                      codeblockPadding: const EdgeInsets.only(left: 12, top: 8, bottom: 8, right: 8),
+                      blockquoteDecoration: BoxDecoration(
+                        border: Border(left: BorderSide(color: t.fgDisabled, width: 2)),
+                      ),
+                      blockquotePadding: const EdgeInsets.only(left: 12, top: 4, bottom: 4),
+                      listBullet: baseStyle.copyWith(color: t.fgTertiary),
+                      strong: baseStyle.copyWith(fontWeight: FontWeight.bold),
+                      em: baseStyle.copyWith(fontStyle: FontStyle.italic),
+                      a: baseStyle.copyWith(
+                        color: t.accentPrimary,
+                        decoration: TextDecoration.underline,
+                        decorationColor: t.accentPrimaryMuted,
+                      ),
+                      tableHead: baseStyle.copyWith(fontWeight: FontWeight.bold),
+                      tableBorder: TableBorder.all(color: t.border, width: 0.5),
+                      tableHeadAlign: TextAlign.left,
+                      tableCellsPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      horizontalRuleDecoration: BoxDecoration(
+                        border: Border(top: BorderSide(color: t.border, width: 0.5)),
+                      ),
                     ),
-                    codeblockPadding: const EdgeInsets.only(left: 12, top: 8, bottom: 8, right: 8),
-                    blockquoteDecoration: BoxDecoration(
-                      border: Border(left: BorderSide(color: t.fgDisabled, width: 2)),
-                    ),
-                    blockquotePadding: const EdgeInsets.only(left: 12, top: 4, bottom: 4),
-                    listBullet: baseStyle.copyWith(color: t.fgTertiary),
-                    strong: baseStyle.copyWith(fontWeight: FontWeight.bold),
-                    em: baseStyle.copyWith(fontStyle: FontStyle.italic),
-                    a: baseStyle.copyWith(
-                      color: t.accentPrimary,
-                      decoration: TextDecoration.underline,
-                      decorationColor: t.accentPrimaryMuted,
-                    ),
-                    tableHead: baseStyle.copyWith(fontWeight: FontWeight.bold),
-                    tableBorder: TableBorder.all(color: t.border, width: 0.5),
-                    tableHeadAlign: TextAlign.left,
-                    tableCellsPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    horizontalRuleDecoration: BoxDecoration(
-                      border: Border(top: BorderSide(color: t.border, width: 0.5)),
-                    ),
+                    onTapLink: (text, href, title) {
+                      if (href != null) {
+                        Clipboard.setData(ClipboardData(text: href));
+                      }
+                    },
                   ),
-                  onTapLink: (text, href, title) {
-                    if (href != null) {
-                      Clipboard.setData(ClipboardData(text: href));
-                    }
-                  },
-                ),
-                if (entry.isStreaming)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 4),
-                    child: _StreamingIndicator(),
+                  if (widget.entry.isStreaming)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 4),
+                      child: _StreamingIndicator(),
+                    ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Text(
+                        _formatTimestamp(widget.entry.timestamp),
+                        style: TextStyle(fontSize: 9, color: t.fgMuted),
+                      ),
+                      const Spacer(),
+                      if (_hovering && !widget.entry.isStreaming)
+                        GestureDetector(
+                          onTap: _copyMessage,
+                          child: MouseRegion(
+                            cursor: SystemMouseCursors.click,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  _copied ? Icons.check : Icons.copy,
+                                  size: 12,
+                                  color: _copied ? t.accentPrimary : t.fgMuted,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  _copied ? 'copied' : 'copy',
+                                  style: TextStyle(
+                                    fontSize: 9,
+                                    color: _copied ? t.accentPrimary : t.fgMuted,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

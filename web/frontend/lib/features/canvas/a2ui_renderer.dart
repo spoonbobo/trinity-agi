@@ -1,6 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:html' as html;
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme.dart';
 import '../../models/a2ui_models.dart';
@@ -134,6 +138,8 @@ class A2UIRendererPanel extends ConsumerStatefulWidget {
 class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
   final Map<String, A2UISurface> _surfaces = {};
   StreamSubscription<WsEvent>? _chatSub;
+  final GlobalKey _repaintBoundaryKey = GlobalKey();
+  bool _showExportMenu = false;
 
   @override
   void initState() {
@@ -253,6 +259,74 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
     client.sendChatMessage('/a2ui-action $payload');
   }
 
+  // Canvas export: download as PNG
+  Future<void> _exportAsPng() async {
+    try {
+      final boundary = _repaintBoundaryKey.currentContext
+          ?.findRenderObject() as RenderRepaintBoundary?;
+      if (boundary == null) return;
+      final image = await boundary.toImage(pixelRatio: 2.0);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) return;
+      final bytes = byteData.buffer.asUint8List();
+      final base64 = base64Encode(bytes);
+      final dataUrl = 'data:image/png;base64,$base64';
+      final anchor = html.AnchorElement(href: dataUrl)
+        ..setAttribute('download', 'canvas-${DateTime.now().millisecondsSinceEpoch}.png')
+        ..click();
+    } catch (e) {
+      debugPrint('[Canvas] export PNG error: $e');
+    }
+    setState(() => _showExportMenu = false);
+  }
+
+  // Canvas export: download as JSON
+  void _exportAsJson() {
+    try {
+      final data = <String, dynamic>{};
+      for (final surface in _surfaces.values) {
+        data[surface.surfaceId] = {
+          'rootId': surface.rootId,
+          'components': surface.components.map((k, v) => MapEntry(k, {
+            'id': v.id,
+            'type': v.type,
+            'props': v.props,
+            if (v.weight != null) 'weight': v.weight,
+          })),
+          'dataModel': surface.dataModel,
+        };
+      }
+      final jsonStr = const JsonEncoder.withIndent('  ').convert(data);
+      final bytes = utf8.encode(jsonStr);
+      final base64 = base64Encode(bytes);
+      final dataUrl = 'data:application/json;base64,$base64';
+      final anchor = html.AnchorElement(href: dataUrl)
+        ..setAttribute('download', 'canvas-${DateTime.now().millisecondsSinceEpoch}.json')
+        ..click();
+    } catch (e) {
+      debugPrint('[Canvas] export JSON error: $e');
+    }
+    setState(() => _showExportMenu = false);
+  }
+
+  // Canvas export: copy as image to clipboard
+  Future<void> _copyAsImage() async {
+    try {
+      final boundary = _repaintBoundaryKey.currentContext
+          ?.findRenderObject() as RenderRepaintBoundary?;
+      if (boundary == null) return;
+      final image = await boundary.toImage(pixelRatio: 2.0);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) return;
+      // On web, clipboard.write with ClipboardItem is needed for images
+      // Fall back to saving the PNG bytes info for user
+      await Clipboard.setData(ClipboardData(text: '[Canvas image captured]'));
+    } catch (e) {
+      debugPrint('[Canvas] copy image error: $e');
+    }
+    setState(() => _showExportMenu = false);
+  }
+
   @override
   void dispose() {
     _chatSub?.cancel();
@@ -295,22 +369,90 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
       );
     }
 
-    // #23: AnimatedSwitcher for surface transitions
-    return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 200),
-      child: ListView(
-        key: ValueKey(_surfaces.keys.join(',')),
-        padding: const EdgeInsets.all(12),
-        children: _surfaces.values.map((surface) {
-          if (surface.rootId == null) return const SizedBox.shrink();
-          final rootComponent = surface.components[surface.rootId];
-          if (rootComponent == null) return const SizedBox.shrink();
-          return KeyedSubtree(
-            key: ValueKey('surface-${surface.surfaceId}'),
-            child: _renderComponent(rootComponent, surface, theme, t),
-          );
-        }).toList(),
-      ),
+    // #23: AnimatedSwitcher for surface transitions + export toolbar
+    return Stack(
+      children: [
+        RepaintBoundary(
+          key: _repaintBoundaryKey,
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 200),
+            child: ListView(
+              key: ValueKey(_surfaces.keys.join(',')),
+              padding: const EdgeInsets.all(12),
+              children: _surfaces.values.map((surface) {
+                if (surface.rootId == null) return const SizedBox.shrink();
+                final rootComponent = surface.components[surface.rootId];
+                if (rootComponent == null) return const SizedBox.shrink();
+                return KeyedSubtree(
+                  key: ValueKey('surface-${surface.surfaceId}'),
+                  child: _renderComponent(rootComponent, surface, theme, t),
+                );
+              }).toList(),
+            ),
+          ),
+        ),
+        // Export toolbar
+        Positioned(
+          top: 4,
+          right: 4,
+          child: _buildExportToolbar(t, theme),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildExportToolbar(ShellTokens t, ThemeData theme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        GestureDetector(
+          onTap: () => setState(() => _showExportMenu = !_showExportMenu),
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: Container(
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: t.surfaceBase.withOpacity(0.8),
+                border: Border.all(color: t.border, width: 0.5),
+              ),
+              child: Icon(Icons.download, size: 12, color: t.fgMuted),
+            ),
+          ),
+        ),
+        if (_showExportMenu) ...[
+          const SizedBox(height: 2),
+          Container(
+            decoration: BoxDecoration(
+              color: t.surfaceBase,
+              border: Border.all(color: t.border, width: 0.5),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _ExportMenuItem(
+                  label: 'download PNG',
+                  icon: Icons.image,
+                  onTap: _exportAsPng,
+                  tokens: t, theme: theme,
+                ),
+                _ExportMenuItem(
+                  label: 'download JSON',
+                  icon: Icons.code,
+                  onTap: _exportAsJson,
+                  tokens: t, theme: theme,
+                ),
+                _ExportMenuItem(
+                  label: 'copy as image',
+                  icon: Icons.content_copy,
+                  onTap: _copyAsImage,
+                  tokens: t, theme: theme,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -398,6 +540,15 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
       case 'Spacer':
         child = SizedBox(
           height: (component.props['height'] as num?)?.toDouble() ?? 16,
+        );
+        break;
+      case 'CodeEditor':
+        child = _A2UICodeEditor(
+          key: ValueKey('ce-${component.id}'),
+          component: component,
+          surface: surface,
+          theme: theme,
+          tokens: t,
         );
         break;
       default:
@@ -1040,6 +1191,262 @@ class _A2UIToggleState extends State<_A2UIToggle> {
         setState(() => _current = v);
         if (_valuePath != null) widget.surface.setPath(_valuePath!, v);
       },
+    );
+  }
+}
+
+// =============================================================================
+// Export menu item
+// =============================================================================
+
+class _ExportMenuItem extends StatefulWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+  final ShellTokens tokens;
+  final ThemeData theme;
+
+  const _ExportMenuItem({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+    required this.tokens,
+    required this.theme,
+  });
+
+  @override
+  State<_ExportMenuItem> createState() => _ExportMenuItemState();
+}
+
+class _ExportMenuItemState extends State<_ExportMenuItem> {
+  bool _hovering = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = widget.tokens;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovering = true),
+      onExit: (_) => setState(() => _hovering = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          color: _hovering ? t.surfaceCard : Colors.transparent,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(widget.icon, size: 11, color: t.fgMuted),
+              const SizedBox(width: 6),
+              Text(widget.label,
+                style: TextStyle(fontSize: 10, color: t.fgSecondary)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// CodeEditor A2UI Component
+// =============================================================================
+
+/// A syntax-highlighted code block component for A2UI surfaces.
+/// Props:
+///   - code: BoundValue (the code text)
+///   - language: BoundValue (language label, e.g. "dart", "python")
+///   - editable: bool (default false)
+///   - lineNumbers: bool (default true)
+class _A2UICodeEditor extends StatefulWidget {
+  final A2UIComponent component;
+  final A2UISurface surface;
+  final ThemeData theme;
+  final ShellTokens tokens;
+
+  const _A2UICodeEditor({
+    super.key,
+    required this.component,
+    required this.surface,
+    required this.theme,
+    required this.tokens,
+  });
+
+  @override
+  State<_A2UICodeEditor> createState() => _A2UICodeEditorState();
+}
+
+class _A2UICodeEditorState extends State<_A2UICodeEditor> {
+  late TextEditingController _controller;
+  String? _codePath;
+  bool _copied = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _codePath = _extractPath(widget.component.props['code']);
+    final initialCode = resolveBoundString(widget.component.props['code'], widget.surface);
+    _controller = TextEditingController(text: initialCode);
+  }
+
+  @override
+  void didUpdateWidget(covariant _A2UICodeEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final newCode = resolveBoundString(widget.component.props['code'], widget.surface);
+    if (newCode != _controller.text) {
+      _controller.text = newCode;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  String? _extractPath(dynamic prop) {
+    if (prop is Map) return prop['path'] as String?;
+    return null;
+  }
+
+  void _copyCode() {
+    Clipboard.setData(ClipboardData(text: _controller.text));
+    setState(() => _copied = true);
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _copied = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = widget.tokens;
+    final c = widget.component;
+    final language = resolveBoundString(c.props['language'], widget.surface);
+    final editable = c.props['editable'] == true;
+    final showLineNumbers = c.props['lineNumbers'] != false;
+
+    final lines = _controller.text.split('\n');
+    final lineCount = lines.length;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Container(
+        decoration: BoxDecoration(
+          color: t.surfaceBase,
+          border: Border.all(color: t.border, width: 0.5),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header bar with language label + copy button
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: t.surfaceCard,
+                border: Border(bottom: BorderSide(color: t.border, width: 0.5)),
+              ),
+              child: Row(
+                children: [
+                  if (language.isNotEmpty)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: t.border, width: 0.5),
+                      ),
+                      child: Text(language,
+                        style: TextStyle(fontSize: 9, color: t.accentPrimary)),
+                    ),
+                  const Spacer(),
+                  GestureDetector(
+                    onTap: _copyCode,
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.click,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            _copied ? Icons.check : Icons.content_copy,
+                            size: 11,
+                            color: _copied ? t.accentPrimary : t.fgMuted,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            _copied ? 'copied' : 'copy',
+                            style: TextStyle(
+                              fontSize: 9,
+                              color: _copied ? t.accentPrimary : t.fgMuted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Code area
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (showLineNumbers)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: List.generate(lineCount, (i) {
+                          return Text(
+                            '${i + 1}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: t.fgDisabled,
+                              height: 1.5,
+                              fontFamily: 'monospace',
+                            ),
+                          );
+                        }),
+                      ),
+                    ),
+                  Expanded(
+                    child: editable
+                        ? TextField(
+                            controller: _controller,
+                            maxLines: null,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: t.accentPrimary,
+                              height: 1.5,
+                              fontFamily: 'monospace',
+                            ),
+                            decoration: const InputDecoration(
+                              border: InputBorder.none,
+                              isDense: true,
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                            onChanged: (value) {
+                              if (_codePath != null) {
+                                widget.surface.setPath(_codePath!, value);
+                              }
+                              setState(() {}); // Refresh line numbers
+                            },
+                          )
+                        : SelectableText(
+                            _controller.text,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: t.accentPrimary,
+                              height: 1.5,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -1,0 +1,8 @@
+{
+  "name": "Weekly Security Audit",
+  "description": "Run a security review of RBAC config, failed logins, and permission changes every Monday at 9am",
+  "schedule": "0 9 * * 1",
+  "command": "Perform a security audit: review recent audit logs for suspicious activity, check for any permission escalations, verify superadmin allowlist, and scan for failed login attempts. Build a security report on the canvas.",
+  "session": "isolated",
+  "enabled": false
+}

@@ -39,3 +39,6 @@ final terminalClientProvider = ChangeNotifierProvider<TerminalProxyClient>((ref)
   final role = roleToString(authState.role);
   return TerminalProxyClient(url: _terminalWsUrl, auth: _sharedAuth, role: role);
 });
+
+/// Active session key — defaults to 'main'.
+final activeSessionProvider = StateProvider<String>((ref) => 'main');
