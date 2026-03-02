@@ -69,10 +69,9 @@ class _ToastWidget extends StatelessWidget {
             Flexible(
               child: SelectableText(
                 message,
-                style: TextStyle(
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: textColor,
                   fontSize: 13,
-                  fontFamily: 'monofur',
                 ),
               ),
             ),
@@ -81,7 +80,7 @@ class _ToastWidget extends StatelessWidget {
               onTap: onDismiss,
               child: Text(
                 'x',
-                style: TextStyle(
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: t.fgTertiary,
                   fontSize: 12,
                 ),

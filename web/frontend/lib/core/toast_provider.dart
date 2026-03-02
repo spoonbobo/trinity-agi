@@ -128,20 +128,19 @@ class _ToastWidget extends StatelessWidget {
                 Flexible(
                   child: SelectableText(
                     message,
-                    style: TextStyle(
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: textColor,
                       fontSize: 13,
-                      fontFamily: 'monofur',
                     ),
                   ),
                 ),
                 const SizedBox(width: 12),
                 GestureDetector(
                   onTap: onDismiss,
-                  child: const Text(
+                  child: Text(
                     'x',
-                    style: TextStyle(
-                      color: Color(0xFF6B7280),
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: const Color(0xFF6B7280),
                       fontSize: 12,
                     ),
                   ),

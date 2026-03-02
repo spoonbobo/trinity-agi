@@ -284,6 +284,11 @@ ThemeData buildTheme(ShellTokens t, Brightness brightness, AppFontFamily fontFam
           fontSize: 13,
           height: 1.5,
         ),
+        bodySmall: TextStyle(
+          color: t.fgTertiary,
+          fontSize: 12,
+          height: 1.5,
+        ),
         titleLarge: TextStyle(
           color: t.fgPrimary,
           fontSize: 16,
