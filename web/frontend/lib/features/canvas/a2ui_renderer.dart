@@ -695,14 +695,15 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
       child: Stack(
         children: [
           canvasContent,
-          // Toolbar row: palette + undo/redo + edit toggle + export
+          // Toolbar row: positioned on right side only
+          // Mode toggle is handled by parent CanvasPanel on the left
           Positioned(
             top: 4,
-            left: 4,
             right: 4,
             child: Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                // Left side: edit mode controls
+                // Edit mode controls (when editing)
                 if (_editMode) ...[
                   ComponentPalette(
                     onAdd: (template) => _addComponent(template),
@@ -729,9 +730,9 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
                     tokens: t,
                     tooltip: 'sync to agent',
                   ),
+                  const SizedBox(width: 8),
                 ],
-                const Spacer(),
-                // Right side: edit toggle + copy + export
+                // Edit toggle + copy + export
                 _toolbarButton(
                   icon: _editMode ? Icons.edit : Icons.edit_outlined,
                   onTap: _toggleEditMode,
