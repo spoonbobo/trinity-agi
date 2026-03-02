@@ -70,7 +70,7 @@ const _knownChannels = <_ChannelDef>[
     _ChannelField('streaming', 'streaming', 'select', options: ['off', 'partial', 'block', 'progress']),
     _ChannelField('reactionNotifications', 'reaction notifications', 'select', options: ['off', 'own', 'all']),
     _ChannelField('configWrites', 'config writes', 'bool'),
-  ], ['channels add --channel telegram --token "BOT_TOKEN"', 'channels status', 'channels list']),
+  ], ['channels status', 'channels list', 'doctor']),
   _ChannelDef('discord', 'Discord', [
     _ChannelField('token', 'bot token', 'text', hint: 'your-bot-token'),
     _ChannelField('historyLimit', 'history limit', 'number', hint: '20'),
@@ -81,7 +81,7 @@ const _knownChannels = <_ChannelDef>[
     _ChannelField('threadBindings.enabled', 'thread bindings', 'bool'),
     _ChannelField('reactionNotifications', 'reaction notifications', 'select', options: ['off', 'own', 'all', 'allowlist']),
     _ChannelField('configWrites', 'config writes', 'bool'),
-  ], ['channels add --channel discord --token "BOT_TOKEN"', 'channels status', 'channels list']),
+  ], ['channels status', 'channels list', 'doctor']),
   _ChannelDef('slack', 'Slack', [
     _ChannelField('botToken', 'bot token', 'text', hint: 'xoxb-...'),
     _ChannelField('appToken', 'app token', 'text', hint: 'xapp-...'),
@@ -92,13 +92,16 @@ const _knownChannels = <_ChannelDef>[
     _ChannelField('allowBots', 'allow bots', 'bool'),
     _ChannelField('reactionNotifications', 'reaction notifications', 'select', options: ['off', 'own', 'all', 'allowlist']),
     _ChannelField('configWrites', 'config writes', 'bool'),
-  ], ['channels add --channel slack --bot-token "xoxb-..." --app-token "xapp-..."', 'channels status', 'channels list']),
+  ], ['channels status', 'channels list', 'doctor']),
   _ChannelDef('signal', 'Signal', [
     _ChannelField('account', 'account', 'text', hint: '+15555550123'),
+    _ChannelField('cliPath', 'CLI path', 'text', hint: 'signal-cli'),
+    _ChannelField('httpUrl', 'daemon URL', 'text', hint: 'http://127.0.0.1:8080'),
     _ChannelField('historyLimit', 'history limit', 'number', hint: '50'),
+    _ChannelField('sendReadReceipts', 'send read receipts', 'bool'),
     _ChannelField('reactionNotifications', 'reaction notifications', 'select', options: ['off', 'own', 'all', 'allowlist']),
     _ChannelField('configWrites', 'config writes', 'bool'),
-  ], ['channels login --channel signal', 'channels status', 'channels list']),
+  ], ['channels status', 'channels list', 'doctor']),
   _ChannelDef('googlechat', 'Google Chat', [
     _ChannelField('serviceAccountFile', 'service account file', 'text', hint: '/path/to/service-account.json'),
     _ChannelField('audienceType', 'audience type', 'select', options: ['app-url', 'project-number']),
@@ -106,12 +109,16 @@ const _knownChannels = <_ChannelDef>[
     _ChannelField('webhookPath', 'webhook path', 'text', hint: '/googlechat'),
     _ChannelField('botUser', 'bot user', 'text', hint: 'users/1234567890'),
     _ChannelField('typingIndicator', 'typing indicator', 'select', options: ['message', 'off']),
-  ], ['channels add --channel googlechat', 'channels status', 'channels list']),
+  ], ['channels status', 'channels list', 'doctor']),
   _ChannelDef('irc', 'IRC', [
+    _ChannelField('host', 'host', 'text', hint: 'irc.libera.chat'),
+    _ChannelField('port', 'port', 'number', hint: '6697'),
+    _ChannelField('tls', 'TLS', 'bool'),
+    _ChannelField('nick', 'nick', 'text', hint: 'openclaw-bot'),
     _ChannelField('nickserv.enabled', 'NickServ enabled', 'bool'),
     _ChannelField('nickserv.password', 'NickServ password', 'text', hint: 'password'),
     _ChannelField('configWrites', 'config writes', 'bool'),
-  ], ['channels add --channel irc', 'channels status', 'channels list']),
+  ], ['channels status', 'channels list', 'doctor']),
   _ChannelDef('imessage', 'iMessage', [
     _ChannelField('cliPath', 'CLI path', 'text', hint: 'imsg'),
     _ChannelField('dbPath', 'DB path', 'text', hint: '~/Library/Messages/chat.db'),
@@ -120,13 +127,18 @@ const _knownChannels = <_ChannelDef>[
     _ChannelField('includeAttachments', 'include attachments', 'bool'),
     _ChannelField('service', 'service', 'select', options: ['auto', 'iMessage', 'SMS']),
     _ChannelField('configWrites', 'config writes', 'bool'),
-  ], ['channels add --channel imessage', 'channels status', 'channels list']),
+  ], ['channels status', 'channels list', 'doctor']),
   _ChannelDef('bluebubbles', 'BlueBubbles', [
+    _ChannelField('serverUrl', 'server URL', 'text', hint: 'http://192.168.1.100:1234'),
+    _ChannelField('password', 'password', 'text', hint: 'api-password'),
+    _ChannelField('webhookPath', 'webhook path', 'text', hint: '/bluebubbles-webhook'),
+    _ChannelField('sendReadReceipts', 'send read receipts', 'bool'),
+    _ChannelField('blockStreaming', 'block streaming', 'bool'),
     _ChannelField('configWrites', 'config writes', 'bool'),
-  ], ['channels add --channel bluebubbles', 'channels status', 'channels list']),
+  ], ['channels add bluebubbles --http-url "http://HOST:PORT" --password "PASSWORD"', 'channels status', 'channels list']),
   _ChannelDef('msteams', 'MS Teams', [
     _ChannelField('configWrites', 'config writes', 'bool'),
-  ], ['channels add --channel msteams', 'channels status', 'channels list']),
+  ], ['plugins install @openclaw/msteams', 'channels status', 'channels list']),
   _ChannelDef('mattermost', 'Mattermost', [
     _ChannelField('botToken', 'bot token', 'text', hint: 'mm-token'),
     _ChannelField('baseUrl', 'base URL', 'text', hint: 'https://chat.example.com'),
@@ -134,7 +146,7 @@ const _knownChannels = <_ChannelDef>[
     _ChannelField('textChunkLimit', 'text chunk limit', 'number', hint: '4000'),
     _ChannelField('chunkMode', 'chunk mode', 'select', options: ['length', 'newline']),
     _ChannelField('configWrites', 'config writes', 'bool'),
-  ], ['channels add --channel mattermost', 'channels status', 'channels list']),
+  ], ['plugins install @openclaw/mattermost', 'channels status', 'channels list']),
 ];
 
 // ---------------------------------------------------------------------------
@@ -486,7 +498,7 @@ class _AdminChannelsTabState extends ConsumerState<AdminChannelsTab> {
   List<String> _getSetupCommands(String channelId) {
     final def = _getChannelDef(channelId);
     if (def != null) return def.setupCommands;
-    return ['channels add --channel $channelId', 'channels status', 'channels list'];
+    return ['channels status', 'channels list', 'doctor'];
   }
 
   @override
