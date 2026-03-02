@@ -30,6 +30,19 @@ const ENV_BLOCKLIST = new Set([
 
 let envOverrides = {};
 
+// ── Env-to-gateway-config mapping ──────────────────────────────────────
+// Maps environment variable names to OpenClaw config paths. Used by the
+// env_sync_gateway handler to write values into the gateway config file
+// via `openclaw config set`, so they survive gateway restarts.
+const ENV_TO_CONFIG_MAP = {
+  'BRAVE_API_KEY':       'tools.web.search.apiKey',
+  'PERPLEXITY_API_KEY':  'tools.web.search.perplexity.apiKey',
+  'OPENROUTER_API_KEY':  'tools.web.search.perplexity.apiKey',
+  'GEMINI_API_KEY':      'tools.web.search.gemini.apiKey',
+  'XAI_API_KEY':         'tools.web.search.grok.apiKey',
+  'FIRECRAWL_API_KEY':   'tools.web.fetch.firecrawl.apiKey',
+};
+
 function loadEnvOverrides() {
   try {
     if (fs.existsSync(ENV_OVERRIDES_PATH)) {
@@ -525,6 +538,123 @@ wss.on('connection', (ws, req) => {
             break;
           }
           safeSend(ws, { type: 'env_list', vars: { ...envOverrides } });
+          break;
+        }
+
+        // ── Sync env overrides into the gateway config + restart ──────
+        case 'env_sync_gateway': {
+          if (!authenticated) {
+            safeSend(ws, { type: 'error', message: 'Not authenticated' });
+            break;
+          }
+          if (userRole !== 'superadmin') {
+            safeSend(ws, { type: 'env_sync_gateway', status: 'error', message: 'Permission denied: requires superadmin' });
+            break;
+          }
+
+          const synced = [];
+          const skipped = [];
+          const errors = [];
+
+          // Collect mappable vars
+          for (const [envKey, envVal] of Object.entries(envOverrides)) {
+            const configPath = ENV_TO_CONFIG_MAP[envKey];
+            if (configPath) {
+              synced.push({ key: envKey, configPath, value: envVal });
+            } else {
+              skipped.push(envKey);
+            }
+          }
+
+          if (synced.length === 0) {
+            safeSend(ws, {
+              type: 'env_sync_gateway',
+              status: 'ok',
+              synced: [],
+              skipped,
+              message: 'no gateway-mappable env vars to sync',
+            });
+            break;
+          }
+
+          // Run config set for each mapped var sequentially
+          const runConfigSet = (configPath, value) => {
+            return new Promise((resolve, reject) => {
+              const child = spawn('docker', [
+                'exec', OPENCLAW_CONTAINER, 'openclaw', 'config', 'set', configPath, value,
+              ], { env: { ...process.env, OPENCLAW_GATEWAY_TOKEN: GATEWAY_TOKEN } });
+              let stderr = '';
+              child.stderr.on('data', (d) => { stderr += d.toString(); });
+              child.on('close', (code) => {
+                if (code === 0) resolve();
+                else reject(new Error(`config set ${configPath} failed (exit ${code}): ${stderr.trim()}`));
+              });
+              child.on('error', reject);
+            });
+          };
+
+          // Restart gateway container via Docker CLI (the terminal-proxy
+          // has the Docker socket mounted, so docker restart works directly)
+          const runGatewayRestart = () => {
+            return new Promise((resolve, reject) => {
+              const child = spawn('docker', ['restart', OPENCLAW_CONTAINER]);
+              let stderr = '';
+              child.stderr.on('data', (d) => { stderr += d.toString(); });
+              child.on('close', (code) => {
+                if (code === 0) resolve();
+                else reject(new Error(`docker restart failed (exit ${code}): ${stderr.trim()}`));
+              });
+              child.on('error', reject);
+            });
+          };
+
+          // Execute all config sets, then restart
+          (async () => {
+            for (const item of synced) {
+              try {
+                await runConfigSet(item.configPath, item.value);
+                log('info', 'Env synced to gateway config', { key: item.key, configPath: item.configPath, action: 'env.sync' });
+              } catch (err) {
+                errors.push(`${item.key}: ${err.message}`);
+                log('error', 'Env sync config set failed', { key: item.key, configPath: item.configPath, error: err.message });
+              }
+            }
+
+            if (errors.length > 0) {
+              safeSend(ws, {
+                type: 'env_sync_gateway',
+                status: 'error',
+                synced: synced.filter(s => !errors.some(e => e.startsWith(s.key + ':'))).map(s => s.key),
+                skipped,
+                errors,
+                message: `${errors.length} config set(s) failed`,
+              });
+              return;
+            }
+
+            // All config sets succeeded -- restart gateway
+            try {
+              await runGatewayRestart();
+              log('info', 'Gateway restart triggered after env sync', { syncedCount: synced.length, action: 'env.sync.restart' });
+              safeSend(ws, {
+                type: 'env_sync_gateway',
+                status: 'ok',
+                synced: synced.map(s => s.key),
+                skipped,
+                message: `synced ${synced.length} var(s) to gateway config, restarting`,
+              });
+            } catch (err) {
+              log('error', 'Gateway restart failed after env sync', { error: err.message });
+              safeSend(ws, {
+                type: 'env_sync_gateway',
+                status: 'error',
+                synced: synced.map(s => s.key),
+                skipped,
+                errors: [err.message],
+                message: `config set succeeded but gateway restart failed: ${err.message}`,
+              });
+            }
+          })();
           break;
         }
 

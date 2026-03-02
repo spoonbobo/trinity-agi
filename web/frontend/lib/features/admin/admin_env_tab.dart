@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme.dart';
 import '../../core/providers.dart' show terminalClientProvider;
+import '../../core/terminal_client.dart' show EnvSyncResult;
+import '../../core/toast_provider.dart';
 
 /// Environment variables management tab: allows superadmins to dynamically
 /// set, edit, and delete env vars that are injected into docker exec commands.
@@ -14,6 +16,7 @@ class AdminEnvTab extends ConsumerStatefulWidget {
 
 class _AdminEnvTabState extends ConsumerState<AdminEnvTab> {
   bool _loading = false;
+  bool _syncing = false;
   String? _error;
   Map<String, String> _vars = {};
 
@@ -146,6 +149,39 @@ class _AdminEnvTabState extends ConsumerState<AdminEnvTab> {
     }
   }
 
+  Future<void> _syncToGateway() async {
+    final client = ref.read(terminalClientProvider);
+    setState(() {
+      _syncing = true;
+      _error = null;
+    });
+
+    try {
+      final result = await client.syncEnvToGateway();
+      if (!mounted) return;
+      setState(() => _syncing = false);
+      if (result.synced.isEmpty) {
+        ToastService.showInfo(context, result.message);
+      } else {
+        ToastService.showInfo(
+          context,
+          'synced ${result.synced.length} var(s) to gateway: ${result.synced.join(", ")}',
+        );
+      }
+    } on EnvSyncResult catch (result) {
+      if (!mounted) return;
+      setState(() => _syncing = false);
+      ToastService.showError(context, result.message);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _syncing = false;
+        _error = 'sync failed: $e';
+      });
+      ToastService.showError(context, 'sync to gateway failed: $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = ShellTokens.of(context);
@@ -179,6 +215,16 @@ class _AdminEnvTabState extends ConsumerState<AdminEnvTab> {
                   ),
                 ),
               const Spacer(),
+              GestureDetector(
+                onTap: (_loading || _syncing) ? null : _syncToGateway,
+                child: Text(
+                  _syncing ? 'syncing...' : 'sync to gateway',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: (_loading || _syncing) ? t.fgDisabled : t.statusWarning,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
               GestureDetector(
                 onTap: _loading ? null : _startAdd,
                 child: Text(
@@ -240,8 +286,8 @@ class _AdminEnvTabState extends ConsumerState<AdminEnvTab> {
             border: Border(top: BorderSide(color: t.border, width: 0.5)),
           ),
           child: Text(
-            'these variables are injected into every terminal command executed via docker exec. '
-            'changes take effect immediately and persist across restarts.',
+            'variables are injected into terminal commands via docker exec. '
+            'use "sync to gateway" to write mapped keys (API keys, etc.) into the gateway config and restart.',
             style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary, fontSize: 10),
           ),
         ),

@@ -6,6 +6,21 @@ import '../core/auth.dart';
 
 enum TerminalConnectionState { disconnected, connecting, connected, error }
 
+/// Result of syncing env vars to the gateway config.
+class EnvSyncResult {
+  final List<String> synced;
+  final List<String> skipped;
+  final List<String> errors;
+  final String message;
+
+  const EnvSyncResult({
+    required this.synced,
+    required this.skipped,
+    required this.errors,
+    required this.message,
+  });
+}
+
 class TerminalOutput {
   final String type; // 'stdout', 'stderr', 'system', 'error', 'exit'
   final String? data;
@@ -45,6 +60,7 @@ class TerminalProxyClient extends ChangeNotifier {
   Completer<Map<String, String>>? _envListCompleter;
   Completer<void>? _envSetCompleter;
   Completer<void>? _envDeleteCompleter;
+  Completer<EnvSyncResult>? _envSyncCompleter;
 
   /// Command queue: each entry is a Future that completes when the previous
   /// command finishes. This ensures only one command runs at a time even when
@@ -242,6 +258,26 @@ class TerminalProxyClient extends ChangeNotifier {
             }
           }
           break;
+
+        case 'env_sync_gateway':
+          if (_envSyncCompleter != null && !_envSyncCompleter!.isCompleted) {
+            final syncedRaw = data['synced'] as List<dynamic>? ?? [];
+            final skippedRaw = data['skipped'] as List<dynamic>? ?? [];
+            final errorsRaw = data['errors'] as List<dynamic>? ?? [];
+            final result = EnvSyncResult(
+              synced: syncedRaw.map((e) => e.toString()).toList(),
+              skipped: skippedRaw.map((e) => e.toString()).toList(),
+              errors: errorsRaw.map((e) => e.toString()).toList(),
+              message: data['message'] as String? ?? '',
+            );
+            if (data['status'] == 'ok') {
+              _envSyncCompleter!.complete(result);
+            } else {
+              // Still provide the result via completeError wrapping
+              _envSyncCompleter!.completeError(result);
+            }
+          }
+          break;
       }
     } catch (e) {
       if (kDebugMode) debugPrint('[Terminal] Error parsing message: $e');
@@ -433,6 +469,9 @@ class TerminalProxyClient extends ChangeNotifier {
     if (_envDeleteCompleter != null && !_envDeleteCompleter!.isCompleted) {
       _envDeleteCompleter!.completeError(err);
     }
+    if (_envSyncCompleter != null && !_envSyncCompleter!.isCompleted) {
+      _envSyncCompleter!.completeError(err);
+    }
   }
 
   /// List all dynamic env var overrides.
@@ -489,6 +528,22 @@ class TerminalProxyClient extends ChangeNotifier {
       'key': key,
     }));
     return _envDeleteCompleter!.future.timeout(timeout);
+  }
+
+  /// Sync all env overrides with known config mappings into the gateway
+  /// config file, then trigger a gateway restart.
+  Future<EnvSyncResult> syncEnvToGateway({
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    if (!_isAuthenticated || _channel == null) {
+      throw StateError('Not connected to terminal proxy');
+    }
+    if (_envSyncCompleter != null && !_envSyncCompleter!.isCompleted) {
+      _envSyncCompleter!.completeError(StateError('Superseded by new request'));
+    }
+    _envSyncCompleter = Completer<EnvSyncResult>();
+    _channel!.sink.add(jsonEncode({'type': 'env_sync_gateway'}));
+    return _envSyncCompleter!.future.timeout(timeout);
   }
 
   void clearOutput() {
