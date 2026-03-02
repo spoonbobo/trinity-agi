@@ -175,6 +175,11 @@ String tr(AppLanguage language, String key) {
       'zh-Hans': '会话',
       'zh-Hant': '會話',
     },
+    'channels': {
+      'en': 'channels',
+      'zh-Hans': '频道',
+      'zh-Hant': '頻道',
+    },
     'env': {
       'en': 'env',
       'zh-Hans': '环境变量',
