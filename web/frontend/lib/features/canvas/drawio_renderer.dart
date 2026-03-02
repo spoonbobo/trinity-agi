@@ -6,12 +6,11 @@ import 'dart:typed_data';
 import 'dart:ui_web' as ui_web;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../core/theme.dart';
-import '../../main.dart' show themeModeProvider;
+import 'canvas_mode_provider.dart';
 
 /// Embeds the diagrams.net (draw.io) editor via iframe + postMessage API.
 /// Supports PNG export and copy-to-clipboard.
-/// Uses minimal interface (light) or full dark interface based on app theme.
+/// Uses minimal interface (light) or full dark interface based on DrawIO theme setting.
 class DrawIORenderer extends ConsumerStatefulWidget {
   final bool dialogIsOpen;
 
@@ -29,7 +28,7 @@ class DrawIORendererState extends ConsumerState<DrawIORenderer> {
   late String _viewType;
   StreamSubscription? _messageSub;
   bool _ready = false;
-  ThemeMode? _lastThemeMode;
+  DrawIOTheme? _lastDrawIOTheme;
 
   // Export callback — set temporarily while waiting for an export response.
   void Function(String format, String data)? _pendingExport;
@@ -38,7 +37,7 @@ class DrawIORendererState extends ConsumerState<DrawIORenderer> {
   void initState() {
     super.initState();
     _viewType = 'drawio-${identityHashCode(this)}';
-    _lastThemeMode = ref.read(themeModeProvider);
+    _lastDrawIOTheme = ref.read(drawIOThemeProvider);
     _setupIframe();
     _listenMessages();
   }
@@ -55,27 +54,15 @@ class DrawIORendererState extends ConsumerState<DrawIORenderer> {
     }
   }
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    // Check if theme changed and reload iframe
-    final currentTheme = ref.read(themeModeProvider);
-    if (_lastThemeMode != currentTheme) {
-      _lastThemeMode = currentTheme;
-      _reloadWithTheme();
-    }
+  /// Get DrawIO theme from provider
+  String _getDrawIOTheme() {
+    final drawIOTheme = ref.read(drawIOThemeProvider);
+    return drawIOTheme == DrawIOTheme.dark ? 'dark' : 'min';
   }
 
-  /// Check if current theme is dark
-  bool _isDarkMode() {
-    final themeMode = ref.read(themeModeProvider);
-    final brightness = Theme.of(context).brightness;
-
-    return switch (themeMode) {
-      ThemeMode.dark => true,
-      ThemeMode.light => false,
-      ThemeMode.system => brightness == Brightness.dark,
-    };
+  /// Reload iframe with current DrawIO theme (called when theme toggled)
+  void reloadWithTheme() {
+    _reloadWithTheme();
   }
 
   void _setupIframe() {
@@ -179,12 +166,6 @@ class DrawIORendererState extends ConsumerState<DrawIORenderer> {
         }
         break;
     }
-  }
-
-  /// Get draw.io UI theme - adaptive to app theme
-  String _getDrawIOTheme() {
-    // Minimal UI for light mode, full dark UI for dark mode
-    return _isDarkMode() ? 'dark' : 'min';
   }
 
   void _post(Map<String, dynamic> message) {

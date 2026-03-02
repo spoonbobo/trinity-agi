@@ -21,6 +21,8 @@ class LoginPage extends ConsumerStatefulWidget {
 class _LoginPageState extends ConsumerState<LoginPage> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _emailFocusNode = FocusNode();
+  final _passwordFocusNode = FocusNode();
   bool _isLogin = true; // true=login, false=signup
   bool _loading = false;
   bool _rememberEmail = false;
@@ -40,6 +42,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
+    _emailFocusNode.dispose();
+    _passwordFocusNode.dispose();
     super.dispose();
   }
 
@@ -201,6 +205,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               // Email
               TextField(
                 controller: _emailController,
+                focusNode: _emailFocusNode,
                 autofocus: !_rememberEmail,
                 keyboardType: TextInputType.emailAddress,
                 textInputAction: TextInputAction.next,
@@ -215,11 +220,15 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     borderSide: BorderSide(color: t.accentPrimary),
                   ),
                 ),
+                onSubmitted: (_) {
+                  FocusScope.of(context).requestFocus(_passwordFocusNode);
+                },
               ),
               const SizedBox(height: 12),
               // Password
               TextField(
                 controller: _passwordController,
+                focusNode: _passwordFocusNode,
                 autofocus: _rememberEmail,
                 obscureText: true,
                 textInputAction: TextInputAction.done,

@@ -13,6 +13,7 @@ import '../../main.dart' show languageProvider, authClientProvider;
 import '../prompt_bar/prompt_bar.dart';
 import '../chat/chat_stream.dart';
 import '../canvas/canvas_panel.dart';
+import '../canvas/canvas_mode_provider.dart';
 import '../governance/approval_panel.dart';
 import '../catalog/skills_cron_dialog.dart';
 import '../automations/automations_dialog.dart';
@@ -51,6 +52,8 @@ class _ShellPageState extends ConsumerState<ShellPage> {
   StreamSubscription? _dragOverSub;
   StreamSubscription? _dragLeaveSub;
   StreamSubscription? _dropSub;
+  StreamSubscription? _domKeyDownSub;
+  StreamSubscription? _domClickSub;
   double _canvasFlex = _defaultCanvasFlex;
   bool _dividerHovered = false;
   // Mobile: which panel is visible (0=chat, 1=canvas)
@@ -71,6 +74,10 @@ class _ShellPageState extends ConsumerState<ShellPage> {
     }
     // Register global Ctrl+K handler so it works even when prompt bar has focus
     HardwareKeyboard.instance.addHandler(_globalKeyHandler);
+    // Register DOM-level keydown to catch Escape even when iframe is focused
+    _domKeyDownSub = html.window.onKeyDown.listen(_handleDomKeyDown);
+    // Auto-blur DrawIO iframe when clicking outside canvas
+    _domClickSub = html.window.onClick.listen(_handleDomClick);
     // Register drag-and-drop on the document body
     _dragEnterSub = html.document.body?.onDragEnter.listen((e) {
       e.preventDefault();
@@ -120,6 +127,8 @@ class _ShellPageState extends ConsumerState<ShellPage> {
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_globalKeyHandler);
+    _domKeyDownSub?.cancel();
+    _domClickSub?.cancel();
     ref.read(gatewayClientProvider).removeListener(_onGatewayStateChange);
     _approvalSub?.cancel();
     _notifSub?.cancel();
@@ -162,6 +171,16 @@ class _ShellPageState extends ConsumerState<ShellPage> {
 
   bool _globalKeyHandler(KeyEvent event) {
     if (event is! KeyDownEvent) return false;
+
+    // Escape: blur DrawIO iframe to return focus to app
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      final canvasMode = ref.read(canvasModeProvider);
+      if (canvasMode == CanvasMode.drawio) {
+        CanvasPanel.drawioKey.currentState?.blur();
+        return true;
+      }
+    }
+
     final isCtrl = HardwareKeyboard.instance.isControlPressed ||
                    HardwareKeyboard.instance.isMetaPressed;
     if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyK) {
@@ -169,6 +188,23 @@ class _ShellPageState extends ConsumerState<ShellPage> {
       return true;
     }
     return false;
+  }
+
+  void _handleDomKeyDown(html.KeyboardEvent event) {
+    // DOM-level handler catches key events even when iframe is focused
+    if (event.keyCode == 27) { // Escape
+      final canvasMode = ref.read(canvasModeProvider);
+      if (canvasMode == CanvasMode.drawio) {
+        CanvasPanel.drawioKey.currentState?.blur();
+      }
+    }
+  }
+
+  void _handleDomClick(html.MouseEvent event) {
+    final canvasMode = ref.read(canvasModeProvider);
+    if (canvasMode == CanvasMode.drawio) {
+      CanvasPanel.drawioKey.currentState?.blur();
+    }
   }
 
   final _dialogs = DialogService.instance;

@@ -12,17 +12,19 @@ import 'drawio_renderer.dart';
 class CanvasPanel extends ConsumerStatefulWidget {
   const CanvasPanel({super.key});
 
+  static final GlobalKey<DrawIORendererState> drawioKey = GlobalKey();
+
   @override
   ConsumerState<CanvasPanel> createState() => _CanvasPanelState();
 }
 
 class _CanvasPanelState extends ConsumerState<CanvasPanel> {
-  final GlobalKey<DrawIORendererState> _drawioKey = GlobalKey();
-
   @override
   Widget build(BuildContext context) {
     final mode = ref.watch(canvasModeProvider);
     final modeNotifier = ref.read(canvasModeProvider.notifier);
+    final drawIOTheme = ref.watch(drawIOThemeProvider);
+    final drawIOThemeNotifier = ref.read(drawIOThemeProvider.notifier);
     final t = ShellTokens.of(context);
 
     return Stack(
@@ -30,31 +32,49 @@ class _CanvasPanelState extends ConsumerState<CanvasPanel> {
         // Renderer area
         Positioned.fill(
           child: switch (mode) {
-            CanvasMode.a2ui => const A2UIRendererPanel(),
+            CanvasMode.a2ui => A2UIRendererPanel(),
             CanvasMode.drawio => ValueListenableBuilder<bool>(
                 valueListenable: DialogService.instance.dialogIsOpenNotifier,
                 builder: (context, dialogIsOpen, child) => DrawIORenderer(
-                  key: _drawioKey,
+                  key: CanvasPanel.drawioKey,
                   dialogIsOpen: dialogIsOpen,
                 ),
               ),
           },
         ),
 
-        // Mode toggle – bottom-right
-        Positioned(
-          bottom: 4,
-          right: 4,
-          child: PointerInterceptor(
-            child: _ModeToggle(
-              currentMode: mode,
-              onModeChanged: (newMode) {
-                modeNotifier.setMode(newMode);
-              },
-              tokens: t,
+        // DrawIO theme toggle – bottom-right (only in drawio mode)
+        if (mode == CanvasMode.drawio)
+          Positioned(
+            bottom: 4,
+            right: 70,
+            child: PointerInterceptor(
+              child: GestureDetector(
+                onTap: () {
+                  drawIOThemeNotifier.toggle();
+                  CanvasPanel.drawioKey.currentState?.reloadWithTheme();
+                },
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      borderRadius: kShellBorderRadiusSm,
+                      color: t.surfaceBase.withOpacity(0.95),
+                      border: Border.all(color: t.border, width: 0.5),
+                    ),
+                    child: Icon(
+                      drawIOTheme == DrawIOTheme.dark 
+                          ? Icons.light_mode 
+                          : Icons.dark_mode,
+                      size: 12,
+                      color: t.fgMuted,
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
-        ),
 
         // Draw.io toolbar – bottom-right above mode toggle
         if (mode == CanvasMode.drawio)
@@ -68,20 +88,40 @@ class _CanvasPanelState extends ConsumerState<CanvasPanel> {
                   _SmallButton(
                     icon: Icons.content_copy,
                     tooltip: 'copy image',
-                    onTap: () => _drawioKey.currentState?.copyPng(),
+                    onTap: () => CanvasPanel.drawioKey.currentState?.copyPng(),
                     tokens: t,
                   ),
                   const SizedBox(width: 2),
                   _SmallButton(
                     icon: Icons.download,
                     tooltip: 'export PNG',
-                    onTap: () => _drawioKey.currentState?.exportPng(),
+                    onTap: () => CanvasPanel.drawioKey.currentState?.exportPng(),
                     tokens: t,
                   ),
                 ],
               ),
             ),
           ),
+
+        // Mode toggle – bottom-right
+        Positioned(
+          bottom: 4,
+          right: 4,
+          child: PointerInterceptor(
+            child: _ModeToggle(
+              currentMode: mode,
+              drawIOTheme: drawIOTheme,
+              onModeChanged: (newMode) {
+                modeNotifier.setMode(newMode);
+              },
+              onDrawioThemeToggle: () {
+                drawIOThemeNotifier.toggle();
+                CanvasPanel.drawioKey.currentState?.reloadWithTheme();
+              },
+              tokens: t,
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -93,12 +133,16 @@ class _CanvasPanelState extends ConsumerState<CanvasPanel> {
 
 class _ModeToggle extends StatelessWidget {
   final CanvasMode currentMode;
+  final DrawIOTheme drawIOTheme;
   final ValueChanged<CanvasMode> onModeChanged;
+  final VoidCallback onDrawioThemeToggle;
   final ShellTokens tokens;
 
   const _ModeToggle({
     required this.currentMode,
+    required this.drawIOTheme,
     required this.onModeChanged,
+    required this.onDrawioThemeToggle,
     required this.tokens,
   });
 
@@ -125,6 +169,24 @@ class _ModeToggle extends StatelessWidget {
             label: 'drawio',
             isSelected: currentMode == CanvasMode.drawio,
             onTap: () => onModeChanged(CanvasMode.drawio),
+            trailing: currentMode == CanvasMode.drawio
+                ? GestureDetector(
+                    onTap: onDrawioThemeToggle,
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.click,
+                      child: Padding(
+                        padding: const EdgeInsets.only(left: 4),
+                        child: Icon(
+                          drawIOTheme == DrawIOTheme.dark
+                              ? Icons.light_mode
+                              : Icons.dark_mode,
+                          size: 10,
+                          color: tokens.fgMuted,
+                        ),
+                      ),
+                    ),
+                  )
+                : null,
             tokens: tokens,
           ),
         ],
@@ -144,12 +206,14 @@ class _ModeButton extends StatelessWidget {
   final String label;
   final bool isSelected;
   final VoidCallback onTap;
+  final Widget? trailing;
   final ShellTokens tokens;
 
   const _ModeButton({
     required this.label,
     required this.isSelected,
     required this.onTap,
+    this.trailing,
     required this.tokens,
   });
 
@@ -167,14 +231,20 @@ class _ModeButton extends StatelessWidget {
                 ? tokens.accentPrimary.withOpacity(0.15)
                 : Colors.transparent,
           ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 10,
-              fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-              color: isSelected ? tokens.accentPrimary : tokens.fgMuted,
-              letterSpacing: 0.5,
-            ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                  color: isSelected ? tokens.accentPrimary : tokens.fgMuted,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              if (trailing != null) trailing!,
+            ],
           ),
         ),
       ),

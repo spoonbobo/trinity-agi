@@ -14,6 +14,7 @@ import '../../models/ws_frame.dart';
 import '../../core/providers.dart';
 import '../../main.dart' show fontFamilyProvider;
 import 'a2ui_editor.dart';
+import 'a2ui_surfaces_provider.dart';
 
 /// Material icon name -> IconData lookup for the Icon component.
 final Map<String, IconData> _materialIconMap = {
@@ -140,120 +141,22 @@ class A2UIRendererPanel extends ConsumerStatefulWidget {
 }
 
 class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
-  final Map<String, A2UISurface> _surfaces = {};
-  StreamSubscription<WsEvent>? _chatSub;
   final GlobalKey _repaintBoundaryKey = GlobalKey();
   bool _showExportMenu = false;
   final LayerLink _exportLayerLink = LayerLink();
   OverlayEntry? _exportOverlay;
 
-  // Edit mode state
-  bool _editMode = false;
-  String? _selectedComponentId;
-  String? _selectedSurfaceId;
-  final UndoRedoManager _undoRedo = UndoRedoManager();
   final FocusNode _canvasFocusNode = FocusNode();
   Timer? _syncDebounce;
 
-  /// Resolved code font family for CodeEditor components.
-  /// Set at the top of build() from fontFamilyProvider.
   String _codeFontFamily = 'monospace';
 
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final client = ref.read(gatewayClientProvider);
-      _chatSub = client.events
-          .where((e) => e.event == 'a2ui' || e.event == 'canvas')
-          .listen(_handleEvent);
-    });
-  }
-
-  void _handleEvent(WsEvent event) {
-    try {
-      _handleA2UIEvent(event);
-    } catch (e, st) {
-      debugPrint('[A2UI] error handling event: $e\n$st');
-    }
-  }
-
-  void _handleA2UIEvent(WsEvent event) {
-    final payload = event.payload;
-    bool needsRebuild = false;
-
-    if (payload.containsKey('surfaceUpdate')) {
-      final raw = payload['surfaceUpdate'];
-      if (raw is Map<String, dynamic>) {
-        try {
-          final update = SurfaceUpdate.fromJson(raw);
-          final surface = _surfaces.putIfAbsent(
-            update.surfaceId,
-            () => A2UISurface(surfaceId: update.surfaceId),
-          );
-          for (final comp in update.components) {
-            surface.components[comp.id] = comp;
-          }
-          needsRebuild = true;
-        } catch (e) {
-          debugPrint('[A2UI] bad surfaceUpdate: $e');
-        }
-      }
-    }
-
-    if (payload.containsKey('beginRendering')) {
-      final raw = payload['beginRendering'];
-      if (raw is Map<String, dynamic>) {
-        try {
-          final begin = BeginRendering.fromJson(raw);
-          final surface = _surfaces.putIfAbsent(
-            begin.surfaceId,
-            () => A2UISurface(surfaceId: begin.surfaceId),
-          );
-          surface.rootId = begin.root;
-          if (begin.catalogId != null) {
-            surface.catalogId = begin.catalogId;
-          }
-          needsRebuild = true;
-        } catch (e) {
-          debugPrint('[A2UI] bad beginRendering: $e');
-        }
-      }
-    }
-
-    if (payload.containsKey('dataModelUpdate')) {
-      final raw = payload['dataModelUpdate'];
-      if (raw is Map<String, dynamic>) {
-        try {
-          final update = DataModelUpdate.fromJson(raw);
-          final surface = _surfaces.putIfAbsent(
-            update.surfaceId,
-            () => A2UISurface(surfaceId: update.surfaceId),
-          );
-          surface.mergeContents(update.path, update.contents);
-          needsRebuild = true;
-        } catch (e) {
-          debugPrint('[A2UI] bad dataModelUpdate: $e');
-        }
-      }
-    }
-
-    if (payload.containsKey('deleteSurface')) {
-      final raw = payload['deleteSurface'];
-      if (raw is Map<String, dynamic>) {
-        try {
-          final del = DeleteSurface.fromJson(raw);
-          if (_surfaces.remove(del.surfaceId) != null) {
-            needsRebuild = true;
-          }
-        } catch (e) {
-          debugPrint('[A2UI] bad deleteSurface: $e');
-        }
-      }
-    }
-
-    if (needsRebuild) setState(() {});
-  }
+  A2UIState get _a2uiState => ref.watch(a2uiSurfacesProvider);
+  Map<String, A2UISurface> get _surfaces => _a2uiState.surfaces;
+  bool get _editMode => _a2uiState.editMode;
+  String? get _selectedComponentId => _a2uiState.selectedComponentId;
+  String? get _selectedSurfaceId => _a2uiState.selectedSurfaceId;
+  UndoRedoManager get _undoRedo => _a2uiState.undoRedo;
 
   void _sendUserAction(String actionName, A2UISurface surface,
       String sourceComponentId, Map<String, dynamic>? actionContext) {
@@ -388,7 +291,6 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
 
   @override
   void dispose() {
-    _chatSub?.cancel();
     _canvasFocusNode.dispose();
     _syncDebounce?.cancel();
     _hideExportMenu();
@@ -400,28 +302,21 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
   // ---------------------------------------------------------------------------
 
   void _toggleEditMode() {
-    setState(() {
-      _editMode = !_editMode;
-      if (!_editMode) {
-        _selectedComponentId = null;
-        _selectedSurfaceId = null;
-      }
-    });
+    final notifier = ref.read(a2uiSurfacesProvider.notifier);
+    final newMode = !_editMode;
+    notifier.setEditMode(newMode);
+    if (!newMode) {
+      notifier.selectComponent(null, null);
+    }
   }
 
   void _selectComponent(String componentId, String surfaceId) {
-    setState(() {
-      _selectedComponentId = componentId;
-      _selectedSurfaceId = surfaceId;
-    });
+    ref.read(a2uiSurfacesProvider.notifier).selectComponent(componentId, surfaceId);
     _canvasFocusNode.requestFocus();
   }
 
   void _deselectComponent() {
-    setState(() {
-      _selectedComponentId = null;
-      _selectedSurfaceId = null;
-    });
+    ref.read(a2uiSurfacesProvider.notifier).selectComponent(null, null);
   }
 
   A2UISurface? get _selectedSurface =>
@@ -433,26 +328,24 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
     return surface.components[_selectedComponentId!];
   }
 
-  /// Push undo snapshot, perform an edit, then trigger rebuild + agent sync.
   void _performEdit(VoidCallback edit) {
-    _undoRedo.pushSnapshot(_surfaces);
+    final notifier = ref.read(a2uiSurfacesProvider.notifier);
+    notifier.pushUndoSnapshot();
     edit();
-    setState(() {});
+    notifier.selectComponent(null, null);
   }
 
   void _handleUndo() {
-    if (_undoRedo.undo(_surfaces)) {
-      _selectedComponentId = null;
-      _selectedSurfaceId = null;
-      setState(() {});
+    final notifier = ref.read(a2uiSurfacesProvider.notifier);
+    if (notifier.undo()) {
+      notifier.selectComponent(null, null);
     }
   }
 
   void _handleRedo() {
-    if (_undoRedo.redo(_surfaces)) {
-      _selectedComponentId = null;
-      _selectedSurfaceId = null;
-      setState(() {});
+    final notifier = ref.read(a2uiSurfacesProvider.notifier);
+    if (notifier.redo()) {
+      notifier.selectComponent(null, null);
     }
   }
 
@@ -465,8 +358,6 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
     _performEdit(() {
       removeComponent(compId, surface);
     });
-    _selectedComponentId = null;
-    _selectedSurfaceId = null;
   }
 
   void _addComponent(ComponentTemplate template) {
@@ -517,8 +408,6 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
       childIds.add(id);
       setChildIds(container, childIds);
     });
-
-    _selectedComponentId = null;
   }
 
   void _reorderChild(A2UISurface surface, A2UIComponent parent, int oldIndex, int newIndex) {
