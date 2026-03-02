@@ -24,7 +24,7 @@ import '../notifications/notification_center.dart';
 import '../../core/dialog_service.dart';
 
 const _canvasSplitKey = 'trinity_canvas_split';
-const _defaultCanvasFlex = 4.0;
+const _defaultCanvasFlex = 7.0;
 const _canvasMinFlex = 1.0;
 const _canvasMaxFlex = 8.0;
 

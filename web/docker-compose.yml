@@ -345,6 +345,7 @@ services:
           memory: 256M
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - terminal-proxy-data:/app/data
     depends_on:
       openclaw-gateway:
         condition: service_healthy
@@ -407,6 +408,7 @@ volumes:
   vault-data:
   grafana-data:
   loki-data:
+  terminal-proxy-data:
 
 networks:
   trinity:

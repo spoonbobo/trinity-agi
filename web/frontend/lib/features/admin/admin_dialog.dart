@@ -9,9 +9,10 @@ import 'admin_audit_tab.dart';
 import 'admin_health_tab.dart';
 import 'admin_rbac_tab.dart';
 import 'admin_sessions_tab.dart';
+import 'admin_env_tab.dart';
 import '../onboarding/onboarding_wizard.dart';
 
-enum AdminTab { users, audit, health, rbac, sessions, setup }
+enum AdminTab { users, audit, health, rbac, sessions, env, setup }
 
 class AdminDialog extends ConsumerStatefulWidget {
   final AdminTab initialTab;
@@ -70,6 +71,8 @@ class _AdminDialogState extends ConsumerState<AdminDialog> {
                   _tabToggle(tr(language, 'sessions'), AdminTab.sessions),
                   if (isSuperadmin) ...[
                     const SizedBox(width: 12),
+                    _tabToggle(tr(language, 'env'), AdminTab.env),
+                    const SizedBox(width: 12),
                     _tabToggle(tr(language, 'setup'), AdminTab.setup),
                   ],
                   const Spacer(),
@@ -117,6 +120,8 @@ class _AdminDialogState extends ConsumerState<AdminDialog> {
         return const AdminRbacTab();
       case AdminTab.sessions:
         return const AdminSessionsTab();
+      case AdminTab.env:
+        return const AdminEnvTab();
       case AdminTab.setup:
         return OnboardingWizard(
           onComplete: () => setState(() => _tab = AdminTab.users),

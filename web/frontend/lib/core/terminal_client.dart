@@ -41,6 +41,11 @@ class TerminalProxyClient extends ChangeNotifier {
   /// Completer that resolves when auth succeeds (or fails/times out).
   Completer<void>? _authCompleter;
 
+  /// Completers for pending env operations (resolved in _onMessage).
+  Completer<Map<String, String>>? _envListCompleter;
+  Completer<void>? _envSetCompleter;
+  Completer<void>? _envDeleteCompleter;
+
   /// Command queue: each entry is a Future that completes when the previous
   /// command finishes. This ensures only one command runs at a time even when
   /// multiple callers invoke executeCommandForOutput concurrently.
@@ -177,10 +182,15 @@ class TerminalProxyClient extends ChangeNotifier {
 
         case 'error':
           _isExecuting = false;
+          final errMsg = data['message'] as String;
           _addOutput(TerminalOutput(
             type: 'error',
-            message: data['message'] as String,
+            message: errMsg,
           ));
+          // Fail any pending env completers -- the server sends generic
+          // {type:'error'} for auth/permission failures on env operations
+          // instead of a typed env_* response.
+          _failPendingEnvCompleters(errMsg);
           notifyListeners();
           break;
 
@@ -197,6 +207,41 @@ class TerminalProxyClient extends ChangeNotifier {
         case 'pong':
           // Keep alive response
           break;
+
+        // ── Dynamic env var responses ──────────────────────────────────
+        case 'env_list':
+          if (_envListCompleter != null && !_envListCompleter!.isCompleted) {
+            final rawVars = data['vars'] as Map<String, dynamic>? ?? {};
+            final vars = rawVars.map((k, v) => MapEntry(k, v.toString()));
+            _envListCompleter!.complete(vars);
+          }
+          break;
+
+        case 'env_set':
+          if (data['status'] == 'ok') {
+            if (_envSetCompleter != null && !_envSetCompleter!.isCompleted) {
+              _envSetCompleter!.complete();
+            }
+          } else {
+            final msg = data['message'] as String? ?? 'Failed to set env var';
+            if (_envSetCompleter != null && !_envSetCompleter!.isCompleted) {
+              _envSetCompleter!.completeError(StateError(msg));
+            }
+          }
+          break;
+
+        case 'env_delete':
+          if (data['status'] == 'ok') {
+            if (_envDeleteCompleter != null && !_envDeleteCompleter!.isCompleted) {
+              _envDeleteCompleter!.complete();
+            }
+          } else {
+            final msg = data['message'] as String? ?? 'Failed to delete env var';
+            if (_envDeleteCompleter != null && !_envDeleteCompleter!.isCompleted) {
+              _envDeleteCompleter!.completeError(StateError(msg));
+            }
+          }
+          break;
       }
     } catch (e) {
       if (kDebugMode) debugPrint('[Terminal] Error parsing message: $e');
@@ -212,6 +257,7 @@ class TerminalProxyClient extends ChangeNotifier {
     if (_authCompleter != null && !_authCompleter!.isCompleted) {
       _authCompleter!.completeError(error);
     }
+    _failPendingEnvCompleters('Connection error');
     notifyListeners();
   }
 
@@ -223,6 +269,7 @@ class TerminalProxyClient extends ChangeNotifier {
         StateError('Terminal proxy connection closed before auth'),
       );
     }
+    _failPendingEnvCompleters('Connection closed');
     notifyListeners();
     _scheduleReconnect();
   }
@@ -371,6 +418,79 @@ class TerminalProxyClient extends ChangeNotifier {
     }
   }
 
+  // ── Dynamic environment variable management (superadmin only) ─────────
+
+  /// Fail all pending env completers with the given error message.
+  /// Called when the connection drops or the server sends a generic error.
+  void _failPendingEnvCompleters(String reason) {
+    final err = StateError(reason);
+    if (_envListCompleter != null && !_envListCompleter!.isCompleted) {
+      _envListCompleter!.completeError(err);
+    }
+    if (_envSetCompleter != null && !_envSetCompleter!.isCompleted) {
+      _envSetCompleter!.completeError(err);
+    }
+    if (_envDeleteCompleter != null && !_envDeleteCompleter!.isCompleted) {
+      _envDeleteCompleter!.completeError(err);
+    }
+  }
+
+  /// List all dynamic env var overrides.
+  Future<Map<String, String>> listEnvVars({
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    if (!_isAuthenticated || _channel == null) {
+      throw StateError('Not connected to terminal proxy');
+    }
+    // Cancel any previous in-flight request to prevent orphaned completers
+    if (_envListCompleter != null && !_envListCompleter!.isCompleted) {
+      _envListCompleter!.completeError(StateError('Superseded by new request'));
+    }
+    _envListCompleter = Completer<Map<String, String>>();
+    _channel!.sink.add(jsonEncode({'type': 'env_list'}));
+    return _envListCompleter!.future.timeout(timeout);
+  }
+
+  /// Set or update a dynamic env var override.
+  Future<void> setEnvVar(
+    String key,
+    String value, {
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    if (!_isAuthenticated || _channel == null) {
+      throw StateError('Not connected to terminal proxy');
+    }
+    if (_envSetCompleter != null && !_envSetCompleter!.isCompleted) {
+      _envSetCompleter!.completeError(StateError('Superseded by new request'));
+    }
+    _envSetCompleter = Completer<void>();
+    _channel!.sink.add(jsonEncode({
+      'type': 'env_set',
+      'key': key,
+      'value': value,
+    }));
+    return _envSetCompleter!.future.timeout(timeout);
+  }
+
+  /// Delete a dynamic env var override.
+  Future<void> deleteEnvVar(
+    String key, {
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    if (!_isAuthenticated || _channel == null) {
+      throw StateError('Not connected to terminal proxy');
+    }
+    if (_envDeleteCompleter != null && !_envDeleteCompleter!.isCompleted) {
+      _envDeleteCompleter!.completeError(StateError('Superseded by new request'));
+    }
+    _envDeleteCompleter = Completer<void>();
+    _channel!.sink.add(jsonEncode({
+      'type': 'env_delete',
+      'key': key,
+    }));
+    return _envDeleteCompleter!.future.timeout(timeout);
+  }
+
   void clearOutput() {
     _outputs.clear();
     notifyListeners();
@@ -389,6 +509,7 @@ class TerminalProxyClient extends ChangeNotifier {
       );
     }
     _authCompleter = null;
+    _failPendingEnvCompleters('Disconnected');
     notifyListeners();
   }
 

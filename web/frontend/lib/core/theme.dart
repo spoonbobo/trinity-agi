@@ -40,8 +40,9 @@ AppFontFamily appFontFamilyFromStorage(String? value) {
     case 'geist-sans':
       return AppFontFamily.geistSans;
     case 'ibm-plex-mono':
-    default:
       return AppFontFamily.ibmPlexMono;
+    default:
+      return AppFontFamily.monofur;
   }
 }
 

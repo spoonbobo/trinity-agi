@@ -4,6 +4,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const fs = require('fs');
 const Docker = require('dockerode');
 const { spawn } = require('child_process');
 const path = require('path');
@@ -15,6 +16,68 @@ const PORT = process.env.TERMINAL_PROXY_PORT || 18790;
 const GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN;
 const JWT_SECRET = process.env.JWT_SECRET;
 const OPENCLAW_CONTAINER = process.env.OPENCLAW_CONTAINER_NAME || 'trinity-openclaw';
+
+// ── Dynamic environment variable overrides ─────────────────────────────
+const ENV_OVERRIDES_PATH = process.env.ENV_OVERRIDES_PATH || path.join(__dirname, 'data', 'env-overrides.json');
+const ENV_KEY_REGEX = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const ENV_KEY_MAX_LEN = 128;
+const ENV_VALUE_MAX_LEN = 4096;
+const ENV_BLOCKLIST = new Set([
+  'OPENCLAW_GATEWAY_TOKEN', 'JWT_SECRET', 'PATH', 'HOME', 'USER',
+  'NODE_ENV', 'DOCKER_HOST', 'HOSTNAME', 'TERMINAL_PROXY_PORT',
+  'OPENCLAW_CONTAINER_NAME', 'ALLOWED_ORIGINS', 'SUPABASE_JWT_SECRET',
+]);
+
+let envOverrides = {};
+
+function loadEnvOverrides() {
+  try {
+    if (fs.existsSync(ENV_OVERRIDES_PATH)) {
+      const raw = fs.readFileSync(ENV_OVERRIDES_PATH, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        envOverrides = parsed;
+        log('info', `Loaded ${Object.keys(envOverrides).length} env override(s) from disk`);
+      }
+    }
+  } catch (err) {
+    log('error', 'Failed to load env overrides, starting empty', { error: err.message });
+    envOverrides = {};
+  }
+}
+
+function saveEnvOverrides() {
+  try {
+    const dir = path.dirname(ENV_OVERRIDES_PATH);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const tmpPath = ENV_OVERRIDES_PATH + '.tmp';
+    fs.writeFileSync(tmpPath, JSON.stringify(envOverrides, null, 2), 'utf8');
+    fs.renameSync(tmpPath, ENV_OVERRIDES_PATH);
+  } catch (err) {
+    log('error', 'Failed to save env overrides', { error: err.message });
+  }
+}
+
+function validateEnvKey(key) {
+  if (!key || typeof key !== 'string') return 'Key is required';
+  if (key.length > ENV_KEY_MAX_LEN) return `Key exceeds ${ENV_KEY_MAX_LEN} characters`;
+  if (!ENV_KEY_REGEX.test(key)) return 'Key must match [A-Za-z_][A-Za-z0-9_]*';
+  if (ENV_BLOCKLIST.has(key.toUpperCase())) return `Key "${key}" is a protected system variable`;
+  return null;
+}
+
+function validateEnvValue(value) {
+  if (value === undefined || value === null) return 'Value is required';
+  const str = String(value);
+  if (str.length > ENV_VALUE_MAX_LEN) return `Value exceeds ${ENV_VALUE_MAX_LEN} characters`;
+  if (str.includes('\0')) return 'Value must not contain null bytes';
+  return null;
+}
+
+// Load persisted env overrides at startup
+loadEnvOverrides();
 
 // ── Startup validation ─────────────────────────────────────────────────
 if (!GATEWAY_TOKEN || GATEWAY_TOKEN.length < 16) {
@@ -114,11 +177,16 @@ function executeCommand(ws, cmd, token) {
     dockerCmd.push('-i');
   }
 
+  // Inject dynamic env var overrides as -e flags (before container name)
+  for (const [k, v] of Object.entries(envOverrides)) {
+    dockerCmd.push('-e', `${k}=${v}`);
+  }
+
   if (validation.cleanCmd.startsWith('cat ')) {
     const filePath = validation.cleanCmd.substring(4).trim();
     dockerCmd.push(OPENCLAW_CONTAINER, 'cat', filePath);
   } else if (validation.cleanCmd === 'clawhub' || validation.cleanCmd.startsWith('clawhub ')) {
-    dockerCmd.push('-w', '/home/node/.openclaw', OPENCLAW_CONTAINER, 'clawhub', ...validation.cleanCmd.split(' ').slice(1));
+    dockerCmd.push(OPENCLAW_CONTAINER, 'clawhub', ...validation.cleanCmd.split(' ').slice(1));
   } else {
     dockerCmd.push(OPENCLAW_CONTAINER, 'openclaw', ...validation.cleanCmd.split(' '));
   }
@@ -191,6 +259,46 @@ app.get('/commands', (req, res) => {
     allowed: getAllowedCommands(),
     interactive: getInteractiveCommands()
   });
+});
+
+// Get/set dynamic environment variable overrides (superadmin via gateway token)
+app.get('/env', (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!timingSafeTokenCompare(token, GATEWAY_TOKEN)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  res.json({ vars: { ...envOverrides } });
+});
+
+app.put('/env', (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!timingSafeTokenCompare(token, GATEWAY_TOKEN)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const { key, value } = req.body;
+  const keyErr = validateEnvKey(key);
+  if (keyErr) return res.status(400).json({ error: keyErr });
+  const valErr = validateEnvValue(value);
+  if (valErr) return res.status(400).json({ error: valErr });
+  envOverrides[key] = String(value);
+  saveEnvOverrides();
+  log('info', 'Env override set via REST', { key, action: 'env.set' });
+  res.json({ status: 'ok', key, value: String(value) });
+});
+
+app.delete('/env/:key', (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!timingSafeTokenCompare(token, GATEWAY_TOKEN)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const { key } = req.params;
+  if (!(key in envOverrides)) {
+    return res.status(404).json({ error: `Key "${key}" not found` });
+  }
+  delete envOverrides[key];
+  saveEnvOverrides();
+  log('info', 'Env override deleted via REST', { key, action: 'env.delete' });
+  res.json({ status: 'ok', key });
 });
 
 const server = app.listen(PORT, () => {
@@ -355,6 +463,70 @@ wss.on('connection', (ws, req) => {
             currentProcess = null;
           }
           break;
+
+        // ── Dynamic environment variable management (superadmin only) ──
+        case 'env_set': {
+          if (!authenticated) {
+            safeSend(ws, { type: 'error', message: 'Not authenticated' });
+            break;
+          }
+          if (userRole !== 'superadmin') {
+            safeSend(ws, { type: 'error', message: 'Permission denied: env management requires superadmin' });
+            break;
+          }
+          const keyErr = validateEnvKey(data.key);
+          if (keyErr) {
+            safeSend(ws, { type: 'env_set', status: 'error', message: keyErr });
+            break;
+          }
+          const valErr = validateEnvValue(data.value);
+          if (valErr) {
+            safeSend(ws, { type: 'env_set', status: 'error', message: valErr });
+            break;
+          }
+          envOverrides[data.key] = String(data.value);
+          saveEnvOverrides();
+          log('info', 'Env override set', { key: data.key, userRole, action: 'env.set' });
+          safeSend(ws, { type: 'env_set', status: 'ok', key: data.key, value: String(data.value) });
+          break;
+        }
+
+        case 'env_delete': {
+          if (!authenticated) {
+            safeSend(ws, { type: 'error', message: 'Not authenticated' });
+            break;
+          }
+          if (userRole !== 'superadmin') {
+            safeSend(ws, { type: 'error', message: 'Permission denied: env management requires superadmin' });
+            break;
+          }
+          if (!data.key || typeof data.key !== 'string') {
+            safeSend(ws, { type: 'env_delete', status: 'error', message: 'Key is required' });
+            break;
+          }
+          if (!(data.key in envOverrides)) {
+            safeSend(ws, { type: 'env_delete', status: 'error', message: `Key "${data.key}" not found` });
+            break;
+          }
+          delete envOverrides[data.key];
+          saveEnvOverrides();
+          log('info', 'Env override deleted', { key: data.key, userRole, action: 'env.delete' });
+          safeSend(ws, { type: 'env_delete', status: 'ok', key: data.key });
+          break;
+        }
+
+        case 'env_list': {
+          if (!authenticated) {
+            safeSend(ws, { type: 'error', message: 'Not authenticated' });
+            break;
+          }
+          if (userRole !== 'superadmin') {
+            safeSend(ws, { type: 'error', message: 'Permission denied: env management requires superadmin' });
+            break;
+          }
+          safeSend(ws, { type: 'env_list', vars: { ...envOverrides } });
+          break;
+        }
 
         case 'ping':
           safeSend(ws, { type: 'pong' });

@@ -175,6 +175,11 @@ String tr(AppLanguage language, String key) {
       'zh-Hans': '会话',
       'zh-Hant': '會話',
     },
+    'env': {
+      'en': 'env',
+      'zh-Hans': '环境变量',
+      'zh-Hant': '環境變數',
+    },
     'schedule_simple': {
       'en': 'simple',
       'zh-Hans': '简易',

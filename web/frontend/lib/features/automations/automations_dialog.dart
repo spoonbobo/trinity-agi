@@ -346,13 +346,6 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
     try {
       // Build command
       final isOneShot = schedule.startsWith('+') || schedule.contains('T');
-      final scheduleFlag = isOneShot ? '--at "$schedule"' : '--cron "$schedule"';
-      final sessionFlag = '--session $_cronSession';
-      final payloadFlag = _cronSession == 'main'
-          ? '--system-event "$message"'
-          : '--message "$message"';
-      final deleteFlag = _cronDeleteAfterRun ? '--delete-after-run' : '';
-      final announceFlag = _cronSession == 'isolated' ? '--announce' : '';
 
       // Sanitize user inputs to prevent shell metacharacter injection
       String shellEscape(String s) => s.replaceAll(r'\', r'\\').replaceAll('"', r'\"').replaceAll(r'$', r'\$').replaceAll('`', r'\`');

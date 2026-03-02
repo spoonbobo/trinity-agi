@@ -280,11 +280,14 @@ A2UI surfaces are delivered via `tool_result` events prefixed with `__A2UI__\n` 
 
 ### Terminal Proxy (port 18790, via `/terminal/`)
 
-**Client->Server:** `auth` (token+role), `exec` (command), `cancel`, `ping`
-**Server->Client:** `auth` (ok/error), `stdout`/`stderr` (data), `system` (message), `error` (message), `exit` (code), `pong`
+**Client->Server:** `auth` (token+role), `exec` (command), `cancel`, `ping`, `env_set` (key+value), `env_delete` (key), `env_list`
+**Server->Client:** `auth` (ok/error), `stdout`/`stderr` (data), `system` (message), `error` (message), `exit` (code), `pong`, `env_set` (status), `env_delete` (status), `env_list` (vars)
 
 Auth modes: gateway token (defaults to superadmin) or JWT with role claim.
 Commands execute via `docker exec trinity-openclaw openclaw <cmd>`.
+
+**Dynamic Environment Variables (superadmin only):**
+Superadmins can set, delete, and list environment variables that are injected as `-e` flags into every `docker exec` command. Changes take effect immediately and persist across restarts (stored in `/app/data/env-overrides.json`). Protected system variables (e.g., `OPENCLAW_GATEWAY_TOKEN`, `JWT_SECRET`, `PATH`) cannot be overridden. Managed via the "env" tab in the Admin panel or via WebSocket `env_set`/`env_delete`/`env_list` messages.
 
 ---
 
@@ -453,6 +456,7 @@ See `prompt_bar.dart` `_showTemplateOverlay()` for the reference implementation.
 | Health | admin/admin_health_tab.dart | Terminal: `status --json`, `health --json` |
 | RBAC | admin/admin_rbac_tab.dart | Role hierarchy, permission matrix, terminal tiers, permission editor |
 | Sessions | admin/admin_sessions_tab.dart | Terminal: `sessions --json` |
+| Env | admin/admin_env_tab.dart | WebSocket: `env_list`, `env_set`, `env_delete` (superadmin only) |
 
 ### Design Tokens
 
@@ -584,7 +588,7 @@ Then hard-refresh browser: Ctrl+Shift+R.
 - Skills: standalone dialog opened from status bar "skills" toggle
 - Automations: standalone dialog with 4 sub-tabs (crons, hooks, webhooks, polls) opened from status bar "automations" toggle
 - Skills view: grouped by ready, not ready, clawhub, templates
-- Admin panel: 5 tabs (users, audit, health, rbac, sessions), visible only to admin/superadmin
+- Admin panel: 6 tabs (users, audit, health, rbac, sessions, env), visible only to admin/superadmin; env tab is superadmin-only
 - Responsive layout: mobile (<600px) stacks chat/canvas with tab switcher; tablet (600-1024px) narrower split; desktop full split
 - All dialogs: zero border-radius, 0.5px borders, monospace font; opened via DialogService.instance.showUnique() to prevent stacking
 - Interactive elements: GestureDetector + Text (no Material buttons in shell)
