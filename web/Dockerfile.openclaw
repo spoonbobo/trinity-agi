@@ -15,6 +15,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 ENV PATH="/opt/doctools/bin:$PATH"
 
+# uv – modern Python script runner (used by nano-banana-* and other skills)
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 RUN corepack enable && npm install -g openclaw@latest clawhub@latest
 
 RUN mkdir -p /home/node/.openclaw/extensions/canvas-bridge && chown -R node:node /home/node/.openclaw

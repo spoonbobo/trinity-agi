@@ -554,24 +554,30 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
         ),
         // Property inspector (edit mode only)
         if (_editMode && _selectedComponent != null && _selectedSurface != null)
-          PropertyInspector(
-            key: ValueKey('prop-${_selectedComponentId}'),
-            component: _selectedComponent!,
-            surface: _selectedSurface!,
-            tokens: t,
-            theme: theme,
-            onEdited: () {
-              _undoRedo.pushSnapshot(_surfaces);
-              setState(() {});
-            },
-            onDelete: _deleteSelected,
-            onDeselect: _deselectComponent,
-            onReorder: (oldIndex, newIndex) {
-              final parent = findParent(
-                  _selectedComponentId!, _selectedSurface!);
-              if (parent != null) {
-                _reorderChild(_selectedSurface!, parent, oldIndex, newIndex);
-              }
+          Builder(
+            builder: (context) {
+              final selectedComp = _selectedComponent!;
+              final selectedSurf = _selectedSurface!;
+              final selectedCompId = _selectedComponentId!;
+              return PropertyInspector(
+                key: ValueKey('prop-$selectedCompId'),
+                component: selectedComp,
+                surface: selectedSurf,
+                tokens: t,
+                theme: theme,
+                onEdited: () {
+                  _undoRedo.pushSnapshot(_surfaces);
+                  setState(() {});
+                },
+                onDelete: _deleteSelected,
+                onDeselect: _deselectComponent,
+                onReorder: (oldIndex, newIndex) {
+                  final parent = findParent(selectedCompId, selectedSurf);
+                  if (parent != null) {
+                    _reorderChild(selectedSurf, parent, oldIndex, newIndex);
+                  }
+                },
+              );
             },
           ),
       ],
@@ -995,9 +1001,10 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
 
     final childId = c.props['child'] as String?;
     Widget? childWidget;
-    if (childId != null && surface.components.containsKey(childId)) {
+    final childComp = childId != null ? surface.components[childId] : null;
+    if (childComp != null) {
       childWidget = _renderComponent(
-          surface.components[childId]!, surface, theme, ShellTokens.of(context));
+          childComp, surface, theme, ShellTokens.of(context));
     }
     final label = resolveBoundString(c.props['label'] ?? c.props['text'], surface);
 
@@ -1022,8 +1029,9 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
     final singleChild = c.props['child'] as String?;
     List<Widget> children;
 
-    if (singleChild != null && surface.components.containsKey(singleChild)) {
-      children = [_renderComponent(surface.components[singleChild]!, surface, theme, t)];
+    final singleChildComp = singleChild != null ? surface.components[singleChild] : null;
+    if (singleChildComp != null) {
+      children = [_renderComponent(singleChildComp, surface, theme, t)];
     } else {
       children = _buildChildren(_resolveChildIds(c.props['children']), surface, theme, t);
     }
@@ -1088,21 +1096,22 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
     final contentChildId = c.props['contentChild'] as String?;
 
     Widget entryPoint = const SizedBox.shrink();
-    if (entryPointChildId != null && surface.components.containsKey(entryPointChildId)) {
-      entryPoint = _renderComponent(surface.components[entryPointChildId]!, surface, theme, t);
+    final entryPointComp = entryPointChildId != null ? surface.components[entryPointChildId] : null;
+    if (entryPointComp != null) {
+      entryPoint = _renderComponent(entryPointComp, surface, theme, t);
     }
 
     return GestureDetector(
       onTap: () {
-        if (contentChildId != null && surface.components.containsKey(contentChildId)) {
+        final contentComp = contentChildId != null ? surface.components[contentChildId] : null;
+        if (contentComp != null) {
           showDialog(context: context, builder: (dialogContext) {
             return Dialog(
               shape: RoundedRectangleBorder(borderRadius: kShellBorderRadius),
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: SingleChildScrollView(
-                  child: _renderComponent(
-                      surface.components[contentChildId]!, surface, theme, t),
+                  child: _renderComponent(contentComp, surface, theme, t),
                 ),
               ),
             );
@@ -1127,12 +1136,13 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
       final title = resolveBoundString(item['title'], surface);
       final childId = item['child'] as String?;
       tabs.add(Tab(key: ValueKey('tab-$i'), text: title));
-      if (childId != null && surface.components.containsKey(childId)) {
+      final childComp = childId != null ? surface.components[childId] : null;
+      if (childComp != null) {
         tabChildren.add(KeyedSubtree(
           key: ValueKey('tab-content-$childId'),
           child: Padding(
             padding: const EdgeInsets.all(8),
-            child: _renderComponent(surface.components[childId]!, surface, theme, t),
+            child: _renderComponent(childComp, surface, theme, t),
           ),
         ));
       } else {
@@ -1266,10 +1276,16 @@ class _A2UIRendererPanelState extends ConsumerState<A2UIRendererPanel> {
 
   List<Widget> _buildChildren(
       List<String> childIds, A2UISurface surface, ThemeData theme, ShellTokens t) {
-    return childIds
-        .map((id) => surface.components[id])
-        .where((c) => c != null)
-        .map((c) => _renderComponent(c!, surface, theme, t))
+    // Eager single-pass to avoid TOCTOU race with lazy iterators
+    final components = <A2UIComponent>[];
+    for (final id in childIds) {
+      final comp = surface.components[id];
+      if (comp != null) {
+        components.add(comp);
+      }
+    }
+    return components
+        .map((c) => _renderComponent(c, surface, theme, t))
         .toList();
   }
 

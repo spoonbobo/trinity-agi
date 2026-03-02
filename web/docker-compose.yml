@@ -301,7 +301,8 @@ services:
     container_name: trinity-openclaw
     restart: unless-stopped
     command: ["openclaw", "gateway", "--port", "18789", "--bind", "lan", "--allow-unconfigured"]
-    # Port NOT exposed to host -- access via nginx reverse proxy
+    ports:
+      - "18789:18789"
     volumes:
       - openclaw-data:/home/node/.openclaw
     env_file:
