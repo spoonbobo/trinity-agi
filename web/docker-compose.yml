@@ -303,6 +303,7 @@ services:
     command: ["openclaw", "gateway", "--port", "18789", "--bind", "lan", "--allow-unconfigured"]
     ports:
       - "18789:18789"
+    shm_size: '2gb'
     volumes:
       - openclaw-data:/home/node/.openclaw
     env_file:
@@ -379,6 +380,7 @@ services:
     volumes:
       - flutter-build:/usr/share/nginx/html:ro
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - openclaw-data:/openclaw-data:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost/auth/health || exit 1"]
       interval: 30s

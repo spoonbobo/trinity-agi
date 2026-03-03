@@ -62,4 +62,60 @@ ensure_config "acp.allowedAgents" '["pi","claude","codex","opencode","gemini"]'
 ensure_config "acp.maxConcurrentSessions" "8"
 ensure_config "acp.runtime.ttlMinutes" "120"
 
+# Browser defaults (managed browser for canvas collaboration)
+ensure_config "browser.enabled" "true"
+ensure_config "browser.defaultProfile" '"openclaw"'
+ensure_config "browser.headless" "true"
+ensure_config "browser.noSandbox" "true"
+
+# Auto-detect Playwright Chromium path
+PW_CHROME=$(find /home/node/.cache/ms-playwright -name "chrome" -type f 2>/dev/null | head -1)
+if [ -n "$PW_CHROME" ]; then
+  ensure_config "browser.executablePath" "\"$PW_CHROME\""
+  echo "[bootstrap] Playwright Chromium: $PW_CHROME"
+fi
+
+# Bridge the browser control service (loopback:18791) to 0.0.0.0:18793
+# so nginx/other containers can proxy to it. Runs in background.
+# Port 18792 is reserved for the Chrome extension relay (gateway+3).
+if command -v socat >/dev/null 2>&1; then
+  socat TCP-LISTEN:18793,fork,reuseaddr,bind=0.0.0.0 TCP:127.0.0.1:18791 &
+  echo "[bootstrap] Browser control bridge: 0.0.0.0:18793 -> 127.0.0.1:18791"
+fi
+
+# Ensure browser screenshot directory is world-readable for nginx (shared volume).
+# nginx serves /__openclaw__/browser-media/ directly from the volume.
+mkdir -p "$OPENCLAW_HOME/media/browser"
+chmod o+rx "$OPENCLAW_HOME/media" "$OPENCLAW_HOME/media/browser" 2>/dev/null || true
+# Background job: periodically make new screenshot files world-readable
+( while true; do chmod -f o+r "$OPENCLAW_HOME/media/browser/"*.png 2>/dev/null; sleep 2; done ) &
+
+# Pre-launch headless Chromium on CDP port 18800 so OpenClaw can attach to it.
+# OpenClaw's internal browser launcher may fail in Docker without a display server;
+# pre-launching ensures the CDP endpoint is ready when the gateway's browser
+# control service starts.
+PW_CHROME=$(find /home/node/.cache/ms-playwright -name "chrome" -type f 2>/dev/null | head -1)
+if [ -n "$PW_CHROME" ]; then
+  mkdir -p "$OPENCLAW_HOME/browser/openclaw/user-data"
+  # Remove stale lock files from previous container runs
+  rm -f "$OPENCLAW_HOME/browser/openclaw/user-data/SingletonLock" \
+        "$OPENCLAW_HOME/browser/openclaw/user-data/SingletonSocket" \
+        "$OPENCLAW_HOME/browser/openclaw/user-data/SingletonCookie" 2>/dev/null
+  DBUS_SESSION_BUS_ADDRESS=/dev/null "$PW_CHROME" \
+    --headless --no-sandbox --disable-gpu --no-first-run \
+    --remote-debugging-port=18800 \
+    --remote-debugging-address=127.0.0.1 \
+    --user-data-dir="$OPENCLAW_HOME/browser/openclaw/user-data" \
+    --disable-dev-shm-usage \
+    --disable-background-networking \
+    --disable-default-apps \
+    --disable-extensions \
+    --disable-sync \
+    --disable-translate \
+    --mute-audio \
+    --hide-scrollbars \
+    2>/tmp/chrome-debug.log &
+  echo "[bootstrap] Pre-launched headless Chromium on CDP port 18800 (PID=$!)"
+fi
+
 exec "$@"

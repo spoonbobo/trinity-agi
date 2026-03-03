@@ -20,7 +20,29 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 RUN corepack enable && npm install -g openclaw@latest clawhub@latest
 
-RUN mkdir -p /home/node/.openclaw/extensions/canvas-bridge && chown -R node:node /home/node/.openclaw
+# Install Playwright Chromium + system deps for browser tool support.
+# Also install socat to bridge browser control (loopback:18791 -> 0.0.0.0:18791)
+# so nginx can proxy to it from outside the container.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+    libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+    libgbm1 libpango-1.0-0 libcairo2 libasound2 libatspi2.0-0 \
+    fonts-liberation xdg-utils wget socat \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* \
+    && PLAYWRIGHT_CLI=$(find /usr/local/lib/node_modules -name "cli.js" -path "*/playwright-core/*" 2>/dev/null | head -1) \
+    && if [ -n "$PLAYWRIGHT_CLI" ]; then \
+         node "$PLAYWRIGHT_CLI" install chromium; \
+       else \
+         npx playwright install chromium || true; \
+       fi
+
+# Move Playwright browsers from root to node user's cache
+RUN mkdir -p /home/node/.cache && \
+    if [ -d /root/.cache/ms-playwright ]; then \
+      cp -r /root/.cache/ms-playwright /home/node/.cache/ms-playwright; \
+    fi
+
+RUN mkdir -p /home/node/.openclaw/extensions/canvas-bridge && chown -R node:node /home/node/.openclaw /home/node/.cache
 
 COPY --chown=node:node skills/ /opt/trinity-seed/skills/
 COPY --chown=node:node cron-templates/ /opt/trinity-seed/cron-templates/
