@@ -60,7 +60,8 @@ def main():
     from openai import OpenAI
     from PIL import Image as PILImage
     from io import BytesIO
-    import base64
+    import re
+    import urllib.request
 
     # Initialize client with POE's OpenAI-compatible API
     client = OpenAI(
@@ -84,29 +85,53 @@ def main():
             }]
         )
 
-        # Extract image URL from response
         content = response.choices[0].message.content
-        
-        # Check if content is a URL or base64 image
-        if content.startswith("http"):
-            # Download image from URL
-            import urllib.request
-            urllib.request.urlretrieve(content, str(output_path))
-        elif content.startswith("data:image"):
-            # Extract base64 data
-            base64_data = content.split(",")[1]
-            image_data = base64.b64decode(base64_data)
-            image = PILImage.open(BytesIO(image_data))
+
+        # POE nano-banana-2 returns text with embedded image URLs.
+        # Extract from markdown image syntax: ![alt](url)
+        # or bare https://pfst.cf2.poecdn.net/... URLs on their own line.
+        img_url = None
+
+        # Try markdown image syntax first
+        md_match = re.search(r'!\[.*?\]\((https://[^\s)]+)\)', content)
+        if md_match:
+            img_url = md_match.group(1)
+        else:
+            # Try bare URL (poecdn or any https image URL)
+            url_match = re.search(
+                r'(https://[^\s)]+\.(?:png|jpe?g|gif|webp|bmp)(?:\?[^\s)]*)?)',
+                content,
+            )
+            if url_match:
+                img_url = url_match.group(1)
+            else:
+                # Last resort: any poecdn URL
+                cdn_match = re.search(r'(https://pfst\.cf2\.poecdn\.net/[^\s)]+)', content)
+                if cdn_match:
+                    img_url = cdn_match.group(1)
+
+        if not img_url:
+            print("Model response (no image URL found):", file=sys.stderr)
+            print(content[:500], file=sys.stderr)
+            print("\nError: No image URL found in response.", file=sys.stderr)
+            sys.exit(1)
+
+        print(f"Downloading image from: {img_url}")
+
+        # Download and save as PNG
+        req = urllib.request.Request(img_url, headers={"User-Agent": "nano-banana-2-poe/1.0"})
+        with urllib.request.urlopen(req) as resp:
+            image_data = resp.read()
+
+        image = PILImage.open(BytesIO(image_data))
+        if image.mode == 'RGBA':
+            rgb_image = PILImage.new('RGB', image.size, (255, 255, 255))
+            rgb_image.paste(image, mask=image.split()[3])
+            rgb_image.save(str(output_path), 'PNG')
+        elif image.mode == 'RGB':
             image.save(str(output_path), 'PNG')
         else:
-            # Try to parse as base64 directly
-            try:
-                image_data = base64.b64decode(content)
-                image = PILImage.open(BytesIO(image_data))
-                image.save(str(output_path), 'PNG')
-            except Exception:
-                print(f"Error: Unable to parse response content: {content[:100]}", file=sys.stderr)
-                sys.exit(1)
+            image.convert('RGB').save(str(output_path), 'PNG')
 
         full_path = output_path.resolve()
         print(f"\nImage saved: {full_path}")
