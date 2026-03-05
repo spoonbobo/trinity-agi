@@ -1,0 +1,116 @@
+# ─── Supabase GoTrue (Auth) ────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: supabase-auth
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "supabase-auth" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "trinity.selectorLabels" (dict "component" "supabase-auth") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "trinity.componentLabels" (dict "component" "supabase-auth" "Release" .Release "Chart" .Chart) | nindent 8 }}
+      {{- if .Values.vault.agentInjector.enabled }}
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: {{ .Values.vault.agentInjector.role | quote }}
+        vault.hashicorp.com/agent-inject-secret-supabase: "secret/data/trinity/supabase"
+        vault.hashicorp.com/agent-inject-secret-keycloak: "secret/data/trinity/keycloak"
+      {{- end }}
+    spec:
+      containers:
+        - name: supabase-auth
+          image: {{ include "trinity.image" (dict "image" .Values.supabaseAuth.image "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: 9999
+              name: http
+          env:
+            - name: GOTRUE_API_HOST
+              value: "0.0.0.0"
+            - name: GOTRUE_API_PORT
+              value: "9999"
+            - name: API_EXTERNAL_URL
+              value: {{ .Values.urls.apiExternalUrl | quote }}
+            - name: GOTRUE_DB_DRIVER
+              value: "postgres"
+            # SUPABASE_POSTGRES_PASSWORD must be defined BEFORE any $(…) reference to it
+            - name: SUPABASE_POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: SUPABASE_POSTGRES_PASSWORD
+            - name: GOTRUE_DB_DATABASE_URL
+              value: "postgres://postgres:$(SUPABASE_POSTGRES_PASSWORD)@supabase-db:5432/supabase?sslmode=disable&search_path=auth"
+            - name: GOTRUE_SITE_URL
+              value: {{ .Values.urls.siteUrl | quote }}
+            - name: GOTRUE_URI_ALLOW_LIST
+              value: ""
+            - name: GOTRUE_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: SUPABASE_JWT_SECRET
+            - name: GOTRUE_JWT_EXP
+              value: "3600"
+            - name: GOTRUE_JWT_DEFAULT_GROUP_NAME
+              value: "authenticated"
+            - name: GOTRUE_DISABLE_SIGNUP
+              value: "false"
+            - name: GOTRUE_EXTERNAL_EMAIL_ENABLED
+              value: "true"
+            - name: GOTRUE_MAILER_AUTOCONFIRM
+              value: "true"
+            - name: GOTRUE_SMS_AUTOCONFIRM
+              value: "true"
+            # Keycloak OIDC
+            - name: GOTRUE_EXTERNAL_KEYCLOAK_ENABLED
+              value: "true"
+            - name: GOTRUE_EXTERNAL_KEYCLOAK_CLIENT_ID
+              value: "trinity-shell"
+            - name: GOTRUE_EXTERNAL_KEYCLOAK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: KEYCLOAK_CLIENT_SECRET
+            - name: GOTRUE_EXTERNAL_KEYCLOAK_URL
+              value: "http://keycloak:8080/realms/trinity"
+            - name: GOTRUE_EXTERNAL_KEYCLOAK_REDIRECT_URI
+              value: "{{ .Values.urls.apiExternalUrl }}/supabase/auth/v1/callback"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.supabaseAuth.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: supabase-auth
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "supabase-auth" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9999
+      targetPort: http
+      name: http
+  selector:
+    {{- include "trinity.selectorLabels" (dict "component" "supabase-auth") | nindent 4 }}

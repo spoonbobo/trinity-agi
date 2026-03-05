@@ -202,48 +202,70 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 ),
               ),
               const SizedBox(height: 24),
-              // Email
-              TextField(
-                controller: _emailController,
-                focusNode: _emailFocusNode,
-                autofocus: !_rememberEmail,
-                keyboardType: TextInputType.emailAddress,
-                textInputAction: TextInputAction.next,
-                autofillHints: const [AutofillHints.email],
-                style: theme.textTheme.bodyLarge,
-                decoration: InputDecoration(
-                  hintText: 'email',
-                  enabledBorder: UnderlineInputBorder(
-                    borderSide: BorderSide(color: t.border),
-                  ),
-                  focusedBorder: UnderlineInputBorder(
-                    borderSide: BorderSide(color: t.accentPrimary),
+              // Email + Password wrapped in AutofillGroup for browser autofill
+              // and FocusTraversalGroup for correct Tab key order
+              AutofillGroup(
+                child: FocusTraversalGroup(
+                  policy: OrderedTraversalPolicy(),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Email
+                      FocusTraversalOrder(
+                        order: const NumericFocusOrder(1),
+                        child: TextField(
+                          controller: _emailController,
+                          focusNode: _emailFocusNode,
+                          autofocus: !_rememberEmail,
+                          keyboardType: TextInputType.emailAddress,
+                          textInputAction: TextInputAction.next,
+                          autofillHints: const [AutofillHints.email],
+                          style: theme.textTheme.bodyLarge,
+                          decoration: InputDecoration(
+                            hintText: 'email',
+                            enabledBorder: UnderlineInputBorder(
+                              borderSide: BorderSide(color: t.border),
+                            ),
+                            focusedBorder: UnderlineInputBorder(
+                              borderSide: BorderSide(color: t.accentPrimary),
+                            ),
+                          ),
+                          onEditingComplete: () {
+                            FocusScope.of(context).requestFocus(_passwordFocusNode);
+                          },
+                          onSubmitted: (_) {
+                            FocusScope.of(context).requestFocus(_passwordFocusNode);
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      // Password
+                      FocusTraversalOrder(
+                        order: const NumericFocusOrder(2),
+                        child: TextField(
+                          controller: _passwordController,
+                          focusNode: _passwordFocusNode,
+                          autofocus: _rememberEmail,
+                          obscureText: true,
+                          textInputAction: TextInputAction.done,
+                          autofillHints: const [AutofillHints.password],
+                          style: theme.textTheme.bodyLarge,
+                          decoration: InputDecoration(
+                            hintText: 'password',
+                            enabledBorder: UnderlineInputBorder(
+                              borderSide: BorderSide(color: t.border),
+                            ),
+                            focusedBorder: UnderlineInputBorder(
+                              borderSide: BorderSide(color: t.accentPrimary),
+                            ),
+                          ),
+                          onSubmitted: (_) => _submitEmail(),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                onSubmitted: (_) {
-                  FocusScope.of(context).requestFocus(_passwordFocusNode);
-                },
-              ),
-              const SizedBox(height: 12),
-              // Password
-              TextField(
-                controller: _passwordController,
-                focusNode: _passwordFocusNode,
-                autofocus: _rememberEmail,
-                obscureText: true,
-                textInputAction: TextInputAction.done,
-                autofillHints: const [AutofillHints.password],
-                style: theme.textTheme.bodyLarge,
-                decoration: InputDecoration(
-                  hintText: 'password',
-                  enabledBorder: UnderlineInputBorder(
-                    borderSide: BorderSide(color: t.border),
-                  ),
-                  focusedBorder: UnderlineInputBorder(
-                    borderSide: BorderSide(color: t.accentPrimary),
-                  ),
-                ),
-                onSubmitted: (_) => _submitEmail(),
               ),
               const SizedBox(height: 12),
               // Remember email

@@ -11,8 +11,8 @@ export default function DocsPage() {
           Introduction
         </h1>
         <p className="font-sans text-lg text-[#8b8b8b]">
-          Welcome to Trinity AGI documentation. One brain. Every user teaches it.
-          Everyone benefits.
+          Welcome to Trinity AGI documentation. A featureless command center
+          where AI agents build the interface on demand.
         </p>
       </div>
 
@@ -21,13 +21,18 @@ export default function DocsPage() {
           What is Trinity AGI?
         </h2>
         <p className="mb-6 font-sans text-sm leading-relaxed text-[#8b8b8b]">
-          Trinity AGI is a collective intelligence system where the screen is never blank because the 
-          intelligence isn't. Every user interaction teaches the brain, and everyone benefits from 
-          what any user teaches it.
+          Trinity AGI is a self-hosted AI platform built around the idea that software should not
+          ship features &mdash; it should emerge them. You start with an empty screen, a prompt bar,
+          and a per-user AI agent powered by{" "}
+          <a href="https://docs.openclaw.ai" target="_blank" rel="noopener noreferrer" className="text-[#6ee7b7] underline">
+            OpenClaw
+          </a>
+          . The agent generates interfaces, executes tasks, and learns from every interaction.
         </p>
         <p className="font-sans text-sm leading-relaxed text-[#8b8b8b]">
-          Unlike traditional AI assistants that start fresh each session, Trinity AGI maintains a 
-          persistent collective memory that grows smarter with every conversation.
+          The platform runs as a 14-service Docker Compose stack (or Kubernetes Helm chart) with
+          a Flutter web shell, Go microservices for multi-tenant gateway orchestration, full RBAC,
+          Supabase for auth and storage, Keycloak for SSO federation, and Grafana/Loki for observability.
         </p>
       </div>
 
@@ -40,7 +45,7 @@ export default function DocsPage() {
             QUICK START
           </h3>
           <p className="font-sans text-sm text-[#8b8b8b]">
-            Get up and running in minutes with our quick start guide.
+            Clone, configure secrets, and run the full stack with Docker Compose in minutes.
           </p>
         </Link>
         <Link
@@ -51,32 +56,40 @@ export default function DocsPage() {
             INSTALLATION
           </h3>
           <p className="font-sans text-sm text-[#8b8b8b]">
-            Learn how to install and configure Trinity AGI.
+            Detailed requirements, Docker Compose setup, and Kubernetes (Helm) deployment.
           </p>
         </Link>
       </div>
 
       <div className="mt-16 border-t border-[#2a2a2a] pt-12">
         <h2 className="mb-6 font-sans text-2xl font-semibold text-[#e5e5e5]">
-          Key Features
+          Key Capabilities
         </h2>
         <ul className="space-y-4">
           {[
             {
-              title: "Collective Memory",
-              desc: "One brain that learns from every user interaction",
+              title: "Per-User AI Agent",
+              desc: "Each user gets a dedicated OpenClaw instance with private memory and context, orchestrated on demand",
             },
             {
-              title: "Self-Hosted",
-              desc: "Run your own instance with full control over your data",
+              title: "Canvas UI (A2UI)",
+              desc: "Agents render real-time Flutter surfaces via the A2UI protocol -- dashboards, forms, tools -- all generated on the fly",
             },
             {
               title: "Multi-Channel",
-              desc: "Connect via web shell, messaging platforms, or API",
+              desc: "Connect via the web shell, WhatsApp, Telegram, Discord, or programmatic API -- all feeding the same agent",
             },
             {
-              title: "Open Source",
-              desc: "MIT licensed, transparent, and extensible",
+              title: "Full RBAC",
+              desc: "NIST-level role hierarchy (guest/user/admin/superadmin), 22 granular permissions, tiered terminal command access",
+            },
+            {
+              title: "Self-Hosted",
+              desc: "MIT licensed, runs on your infrastructure -- Docker Compose for dev, Helm chart for Kubernetes production",
+            },
+            {
+              title: "Observability",
+              desc: "Grafana dashboards, Loki log aggregation, and Fluentd collection built in from day one",
             },
           ].map((feature) => (
             <li

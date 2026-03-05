@@ -1,0 +1,16 @@
+# Per-user persistent storage for OpenClaw state, sessions, workspace
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "openclaw.name" . }}-data
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "openclaw.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.storageClass }}
+  storageClassName: {{ .Values.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.storageSize }}

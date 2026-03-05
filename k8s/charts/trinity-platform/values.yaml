@@ -1,0 +1,222 @@
+# ─── Global ────────────────────────────────────────────────────────────────
+global:
+  namespace: trinity
+  # Container registry prefix (e.g., "ghcr.io/your-org/" or "" for local)
+  imageRegistry: ""
+  imagePullPolicy: IfNotPresent
+  # Storage class for all PVCs. Set to "" to use cluster default.
+  storageClass: ""
+
+# ─── Secrets (provide via --set or external secret manager) ───────────────
+secrets:
+  supabaseJwtSecret: ""
+  supabaseAnonKey: ""
+  supabasePostgresPassword: ""
+  keycloakAdminPassword: ""
+  keycloakClientSecret: ""
+  grafanaPassword: ""
+  vaultToken: "root"
+  # Note: OPENCLAW_GATEWAY_TOKEN is now per-user, managed by the orchestrator.
+  # This is the orchestrator's internal service token for inter-service auth.
+  orchestratorServiceToken: ""
+
+# ─── URLs ──────────────────────────────────────────────────────────────────
+urls:
+  apiExternalUrl: "http://localhost"
+  siteUrl: "http://localhost"
+  allowedOrigins: "http://localhost"
+
+# ─── Superadmin ────────────────────────────────────────────────────────────
+superadmin:
+  enabled: false
+  email: "admin@trinity.local"
+  password: ""
+  allowlist: ""
+
+# ─── Supabase DB ──────────────────────────────────────────────────────────
+supabaseDb:
+  image: supabase/postgres:15.8.1.127
+  storage: 10Gi
+  resources:
+    limits:
+      memory: 1Gi
+    requests:
+      memory: 512Mi
+      cpu: 250m
+
+# ─── Vault ─────────────────────────────────────────────────────────────────
+vault:
+  image: hashicorp/vault:1.15
+  devMode: true
+  storage: 1Gi
+  # Vault Agent Injector: when enabled, pods receive Vault sidecar annotations.
+  # Secrets are injected as files to /vault/secrets/. Disabled by default;
+  # services fall back to the static trinity-secrets K8s Secret.
+  agentInjector:
+    enabled: false
+    role: "trinity"
+  resources:
+    limits:
+      memory: 256Mi
+    requests:
+      memory: 128Mi
+      cpu: 100m
+
+# ─── Supabase Auth (GoTrue) ───────────────────────────────────────────────
+supabaseAuth:
+  image: supabase/gotrue:v2.170.0
+  resources:
+    limits:
+      memory: 256Mi
+    requests:
+      memory: 128Mi
+      cpu: 100m
+
+# ─── Keycloak ──────────────────────────────────────────────────────────────
+keycloak:
+  image: quay.io/keycloak/keycloak:26.1
+  admin: admin
+  resources:
+    limits:
+      memory: 1Gi
+    requests:
+      memory: 512Mi
+      cpu: 250m
+  # Authentik IdP federation (optional)
+  authentik:
+    enabled: false
+    issuerUrl: ""
+    clientId: ""
+    clientSecret: ""
+    scopes: "openid profile email groups"
+    groupsMapperEnabled: true
+    defaultGroupValue: "trinity_user"
+
+# ─── Auth Service ──────────────────────────────────────────────────────────
+authService:
+  image: trinity-auth-service:latest
+  port: 18791
+  resources:
+    limits:
+      memory: 256Mi
+    requests:
+      memory: 128Mi
+      cpu: 100m
+
+# ─── Gateway Orchestrator (new) ───────────────────────────────────────────
+gatewayOrchestrator:
+  image: trinity-gateway-orchestrator:latest
+  port: 18801
+  replicas: 1
+  resources:
+    limits:
+      memory: 256Mi
+    requests:
+      memory: 128Mi
+      cpu: 100m
+  # Helm chart path for openclaw-instance (mounted into orchestrator pod)
+  openclawChartPath: /charts/openclaw-instance
+
+# ─── Gateway Proxy (new) ──────────────────────────────────────────────────
+gatewayProxy:
+  image: trinity-gateway-proxy:latest
+  port: 18800
+  replicas: 2
+  resources:
+    limits:
+      memory: 512Mi
+    requests:
+      memory: 256Mi
+      cpu: 250m
+  # Cache TTL for user->backend resolution (seconds)
+  resolverCacheTTL: 30
+
+# ─── Terminal Proxy ────────────────────────────────────────────────────────
+terminalProxy:
+  image: trinity-terminal-proxy:latest
+  port: 18790
+  resources:
+    limits:
+      memory: 256Mi
+    requests:
+      memory: 128Mi
+      cpu: 100m
+
+# ─── Frontend ──────────────────────────────────────────────────────────────
+frontend:
+  image: trinity-frontend:latest
+  # Frontend is a static build; served by nginx/ingress
+
+# ─── Ingress ──────────────────────────────────────────────────────────────
+ingress:
+  enabled: true
+  className: ""
+  annotations: {}
+  host: ""
+  tls:
+    enabled: false
+    secretName: ""
+
+# ─── Nginx (internal reverse proxy, optional if using ingress directly) ───
+nginx:
+  enabled: true
+  image: nginx:1.27-alpine
+  replicas: 1
+  resources:
+    limits:
+      memory: 128Mi
+    requests:
+      memory: 64Mi
+      cpu: 50m
+
+# ─── Loki ──────────────────────────────────────────────────────────────────
+loki:
+  enabled: true
+  image: grafana/loki:3.4.2
+  storage: 10Gi
+  resources:
+    limits:
+      memory: 512Mi
+    requests:
+      memory: 256Mi
+      cpu: 100m
+
+# ─── Grafana ───────────────────────────────────────────────────────────────
+grafana:
+  enabled: true
+  image: grafana/grafana:11.5.2
+  storage: 5Gi
+  resources:
+    limits:
+      memory: 256Mi
+    requests:
+      memory: 128Mi
+      cpu: 100m
+
+# ─── Marketing Site (Next.js) ──────────────────────────────────────────────
+site:
+  enabled: true
+  image: trinity-site:latest
+  port: 3000
+  replicas: 1
+  # Subdomain for the marketing site (e.g., www.trinity.ai or trinity.ai)
+  # Leave empty to skip site Ingress creation
+  host: ""
+  tlsSecretName: ""
+  resources:
+    limits:
+      memory: 256Mi
+    requests:
+      memory: 128Mi
+      cpu: 50m
+
+# ─── Fluentd ──────────────────────────────────────────────────────────────
+fluentd:
+  enabled: true
+  image: fluent/fluentd:v1.16-1
+  resources:
+    limits:
+      memory: 256Mi
+    requests:
+      memory: 128Mi
+      cpu: 50m

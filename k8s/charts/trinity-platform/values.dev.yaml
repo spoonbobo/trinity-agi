@@ -1,0 +1,62 @@
+# Dev overlay -- smaller resources, single replicas, dev mode enabled
+global:
+  namespace: trinity-dev
+  imagePullPolicy: Always
+  storageClass: ""
+
+vault:
+  devMode: true
+
+supabaseDb:
+  storage: 2Gi
+  resources:
+    limits:
+      memory: 512Mi
+    requests:
+      memory: 256Mi
+      cpu: 100m
+
+keycloak:
+  resources:
+    limits:
+      memory: 512Mi
+    requests:
+      memory: 256Mi
+      cpu: 100m
+
+gatewayOrchestrator:
+  replicas: 1
+  resources:
+    limits:
+      memory: 128Mi
+    requests:
+      memory: 64Mi
+      cpu: 50m
+
+gatewayProxy:
+  replicas: 1
+  resources:
+    limits:
+      memory: 256Mi
+    requests:
+      memory: 128Mi
+      cpu: 100m
+
+loki:
+  storage: 2Gi
+grafana:
+  storage: 1Gi
+
+site:
+  enabled: true
+  host: ""
+  resources:
+    limits:
+      memory: 128Mi
+    requests:
+      memory: 64Mi
+      cpu: 50m
+
+superadmin:
+  enabled: true
+  email: "admin@trinity.local"

@@ -6,15 +6,30 @@ Trinity AGI is a "featureless" Universal Command Center. It is a host, not an ap
 
 ## Repository Structure
 
-- **`web/`** — The command center application (Flutter frontend + OpenClaw Gateway backend, orchestrated with Docker Compose).
+- **`web/`** — The command center application (Flutter frontend, backend services, Dockerfiles).
+- **`k8s/`** — Helm charts for Kubernetes deployment (`trinity-platform` shared services + `openclaw-instance` per-user pods).
 - **`site/`** — The public marketing website (Next.js, Tailwind CSS, dark theme).
 
-## Architecture (web/)
+## Architecture
 
-- **OpenClaw Gateway** is the backend. It provides the agent engine, multi-provider LLM, tool execution, sessions, memory, governance, and multi-channel messaging. Do not build a separate backend. Do not call LLM APIs directly. All agent logic flows through OpenClaw.
-- **Flutter Web Shell** is the frontend. It connects to the Gateway via WebSocket as an `operator` client. It renders A2UI surfaces, displays streaming chat, handles voice input, and surfaces governance approvals.
-- **Terminal Proxy** provides browser-safe OpenClaw CLI execution for setup/status/catalog actions (`/terminal/` WebSocket route).
-- **nginx** serves the built Flutter app and reverse-proxies `/ws`, `/v1`, `/tools`, `/__openclaw__/`, and `/terminal/`.
+Trinity AGI is deployed on Kubernetes. Each user gets an isolated OpenClaw gateway pod.
+
+- **OpenClaw Gateway** (per-user) is the AI backend. Each user gets their own pod with isolated state, sessions, and workspace. Do not build a separate backend. Do not call LLM APIs directly. All agent logic flows through OpenClaw.
+- **Gateway Proxy** (Go) routes WebSocket/HTTP traffic to the correct per-user OpenClaw pod based on JWT authentication.
+- **Gateway Orchestrator** (Go) manages the lifecycle of per-user pods (provision, deprovision, health checks) via K8s API.
+- **Flutter Web Shell** is the frontend. It connects via WebSocket through the gateway-proxy. Auth is JWT-based (no compile-time gateway token).
+- **Terminal Proxy** provides browser-safe OpenClaw CLI execution via `kubectl exec` into per-user pods.
+- **nginx** serves the built Flutter app and reverse-proxies all routes through the gateway-proxy.
+- **Vault** (with Agent Injector) manages all secrets. No `.env` files in production.
+
+## Deployment
+
+Infrastructure is managed via Helm on Kubernetes. See the `k8s-deploy` skill for full deployment instructions.
+
+- **Local dev**: minikube with `values.dev.yaml`
+- **Production**: any K8s cluster with `values.prod.yaml`
+- **Images**: pushed to `ghcr.io/spoonbobo/trinity-agi/`
+- **Docker Compose** (`web/docker-compose.yml`): legacy single-tenant mode, deprecated.
 
 ## Communication Protocol
 
@@ -48,7 +63,7 @@ Every agent action that modifies system state must pass through OpenClaw's gover
 
 - Do not add traditional navigation bars, sidebars, or feature menus
 - Do not call LLM provider APIs directly — use OpenClaw Gateway
-- Do not store secrets in code — use `.env`
+- Do not store secrets in code — use Vault (K8s) or `.env` (local dev only)
 - Do not disable sandbox mode or exec approvals
 - Do not add heavy UI frameworks or component libraries — keep the shell minimal
 - Do not commit `.env`

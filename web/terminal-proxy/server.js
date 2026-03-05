@@ -17,6 +17,13 @@ const GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN;
 const JWT_SECRET = process.env.JWT_SECRET;
 const OPENCLAW_CONTAINER = process.env.OPENCLAW_CONTAINER_NAME || 'trinity-openclaw';
 
+// ── Multi-tenant K8s support ───────────────────────────────────────────
+const EXEC_MODE = process.env.EXEC_MODE || 'docker'; // 'docker' or 'kubectl'
+const ORCHESTRATOR_URL = process.env.ORCHESTRATOR_URL || '';
+const ORCHESTRATOR_SERVICE_TOKEN = process.env.ORCHESTRATOR_SERVICE_TOKEN || '';
+const K8S_NAMESPACE = process.env.NAMESPACE || 'trinity';
+const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://auth-service:18791';
+
 // ── Dynamic environment variable overrides ─────────────────────────────
 const ENV_OVERRIDES_PATH = process.env.ENV_OVERRIDES_PATH || path.join(__dirname, 'data', 'env-overrides.json');
 const ENV_KEY_REGEX = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -26,6 +33,7 @@ const ENV_BLOCKLIST = new Set([
   'OPENCLAW_GATEWAY_TOKEN', 'JWT_SECRET', 'PATH', 'HOME', 'USER',
   'NODE_ENV', 'DOCKER_HOST', 'HOSTNAME', 'TERMINAL_PROXY_PORT',
   'OPENCLAW_CONTAINER_NAME', 'ALLOWED_ORIGINS', 'SUPABASE_JWT_SECRET',
+  'EXEC_MODE', 'ORCHESTRATOR_URL', 'ORCHESTRATOR_SERVICE_TOKEN', 'NAMESPACE',
 ]);
 
 let envOverrides = {};
@@ -92,10 +100,66 @@ function validateEnvValue(value) {
 // Load persisted env overrides at startup
 loadEnvOverrides();
 
+// ── RBAC role resolution via auth-service ──────────────────────────────
+// GoTrue JWTs only contain role="authenticated". The real RBAC role
+// (guest/user/admin/superadmin) must be resolved from the auth-service.
+async function resolveRbacRole(jwtToken) {
+  try {
+    const res = await fetch(`${AUTH_SERVICE_URL}/auth/me`, {
+      headers: { Authorization: `Bearer ${jwtToken}` },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.role || null;
+  } catch (err) {
+    log('warn', 'RBAC role resolution failed', { error: err.message });
+    return null;
+  }
+}
+
 // ── Startup validation ─────────────────────────────────────────────────
 if (!GATEWAY_TOKEN || GATEWAY_TOKEN.length < 16) {
   console.error('[terminal-proxy] FATAL: OPENCLAW_GATEWAY_TOKEN must be set and >= 16 characters.');
   process.exit(1);
+}
+
+// ── Orchestrator pod resolver (K8s multi-tenant) ──────────────────────
+// Caches resolved pods for 30s to avoid hammering the orchestrator on
+// every command execution within the same connection.
+const _podCache = new Map(); // key=userId, value={data, expiresAt}
+const POD_CACHE_TTL = 30_000;
+
+async function resolveUserPod(userId) {
+  if (!ORCHESTRATOR_URL) throw new Error('ORCHESTRATOR_URL not configured');
+
+  const cached = _podCache.get(userId);
+  if (cached && cached.expiresAt > Date.now()) return cached.data;
+
+  const res = await fetch(`${ORCHESTRATOR_URL}/resolve/${userId}`, {
+    headers: { 'Authorization': `Bearer ${ORCHESTRATOR_SERVICE_TOKEN}` }
+  });
+  if (!res.ok) throw new Error(`Pod not found for user ${userId}: ${res.status}`);
+  const data = await res.json(); // { host, port, token, podName }
+  _podCache.set(userId, { data, expiresAt: Date.now() + POD_CACHE_TTL });
+  return data;
+}
+
+// Resolve an OpenClaw instance pod by its ID (new shared model).
+async function resolveOpenClawPod(openclawId) {
+  if (!ORCHESTRATOR_URL) throw new Error('ORCHESTRATOR_URL not configured');
+
+  const cacheKey = `oc:${openclawId}`;
+  const cached = _podCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.data;
+
+  const res = await fetch(`${ORCHESTRATOR_URL}/openclaws/${openclawId}/resolve`, {
+    headers: { 'Authorization': `Bearer ${ORCHESTRATOR_SERVICE_TOKEN}` }
+  });
+  if (!res.ok) throw new Error(`OpenClaw ${openclawId} not found: ${res.status}`);
+  const data = await res.json(); // { host, port, token, podName }
+  _podCache.set(cacheKey, { data, expiresAt: Date.now() + POD_CACHE_TTL });
+  return data;
 }
 
 // ── Structured logging ─────────────────────────────────────────────────
@@ -167,48 +231,65 @@ function validateCommand(cmd) {
 }
 
 // ── Command execution ──────────────────────────────────────────────────
-function executeCommand(ws, cmd, token) {
-  const validation = validateCommand(cmd);
-
-  // Auth check FIRST, before revealing command validation details
-  if (!timingSafeTokenCompare(token, GATEWAY_TOKEN)) {
-    safeSend(ws, { type: 'error', message: 'Invalid authentication token' });
-    safeSend(ws, { type: 'exit', code: 1, message: 'Authentication failed' });
-    return null;
-  }
-
-  if (!validation.isAllowed) {
-    safeSend(ws, { type: 'error', message: 'Command not permitted' });
-    safeSend(ws, { type: 'exit', code: 1, message: 'Command rejected' });
-    return null;
-  }
-
-  // Execute via docker exec (use -i only, not -it since we don't have a TTY)
-  const dockerCmd = ['exec'];
+// Build the argv array for Docker mode.
+function _buildDockerArgs(validation, token) {
+  const args = ['exec'];
 
   if (validation.isInteractive) {
-    dockerCmd.push('-i');
+    args.push('-i');
   }
 
   // Inject dynamic env var overrides as -e flags (before container name)
   for (const [k, v] of Object.entries(envOverrides)) {
-    dockerCmd.push('-e', `${k}=${v}`);
+    args.push('-e', `${k}=${v}`);
   }
 
   if (validation.cleanCmd.startsWith('cat ')) {
     const filePath = validation.cleanCmd.substring(4).trim();
-    dockerCmd.push(OPENCLAW_CONTAINER, 'cat', filePath);
+    args.push(OPENCLAW_CONTAINER, 'cat', filePath);
   } else if (validation.cleanCmd === 'clawhub' || validation.cleanCmd.startsWith('clawhub ')) {
-    dockerCmd.push(OPENCLAW_CONTAINER, 'clawhub', ...validation.cleanCmd.split(' ').slice(1));
+    args.push(OPENCLAW_CONTAINER, 'clawhub', ...validation.cleanCmd.split(' ').slice(1));
   } else {
-    dockerCmd.push(OPENCLAW_CONTAINER, 'openclaw', ...validation.cleanCmd.split(' '));
+    args.push(OPENCLAW_CONTAINER, 'openclaw', ...validation.cleanCmd.split(' '));
   }
 
-  safeSend(ws, { type: 'system', message: `$ ${validation.cleanCmd}` });
+  return { bin: 'docker', args, env: { ...process.env, OPENCLAW_GATEWAY_TOKEN: token } };
+}
 
-  const child = spawn('docker', dockerCmd, {
-    env: { ...process.env, OPENCLAW_GATEWAY_TOKEN: token }
-  });
+// Build the argv array for kubectl mode.
+function _buildKubectlArgs(validation, podName, podToken) {
+  const args = ['exec', '-i', podName, '-n', K8S_NAMESPACE, '--'];
+
+  // kubectl exec doesn't support -e for env injection, so we prefix the
+  // command with env KEY=VAL ... to achieve the same effect.
+  const envPrefix = [];
+  for (const [k, v] of Object.entries(envOverrides)) {
+    envPrefix.push(`${k}=${v}`);
+  }
+  // Always inject the per-user gateway token
+  envPrefix.push(`OPENCLAW_GATEWAY_TOKEN=${podToken}`);
+
+  if (envPrefix.length > 0) {
+    args.push('env', ...envPrefix);
+  }
+
+  if (validation.cleanCmd.startsWith('cat ')) {
+    const filePath = validation.cleanCmd.substring(4).trim();
+    args.push('cat', filePath);
+  } else if (validation.cleanCmd === 'clawhub' || validation.cleanCmd.startsWith('clawhub ')) {
+    args.push('clawhub', ...validation.cleanCmd.split(' ').slice(1));
+  } else {
+    args.push('openclaw', ...validation.cleanCmd.split(' '));
+  }
+
+  return { bin: 'kubectl', args, env: { ...process.env } };
+}
+
+// Spawn the child process and wire up ws streaming.
+function _spawnAndStream(ws, bin, args, env, cleanCmd) {
+  safeSend(ws, { type: 'system', message: `$ ${cleanCmd}` });
+
+  const child = spawn(bin, args, { env });
 
   child.stdout.on('data', (data) => {
     safeSend(ws, { type: 'stdout', data: data.toString() });
@@ -232,6 +313,39 @@ function executeCommand(ws, cmd, token) {
   });
 
   return child;
+}
+
+// Main entry point -- dispatches to Docker or kubectl depending on EXEC_MODE.
+// When using kubectl, podInfo must be pre-resolved via resolveUserPod().
+function executeCommand(ws, cmd, token, podInfo) {
+  const validation = validateCommand(cmd);
+
+  // Auth check FIRST, before revealing command validation details
+  if (!timingSafeTokenCompare(token, GATEWAY_TOKEN)) {
+    safeSend(ws, { type: 'error', message: 'Invalid authentication token' });
+    safeSend(ws, { type: 'exit', code: 1, message: 'Authentication failed' });
+    return null;
+  }
+
+  if (!validation.isAllowed) {
+    safeSend(ws, { type: 'error', message: 'Command not permitted' });
+    safeSend(ws, { type: 'exit', code: 1, message: 'Command rejected' });
+    return null;
+  }
+
+  if (EXEC_MODE === 'kubectl') {
+    if (!podInfo || !podInfo.podName) {
+      safeSend(ws, { type: 'error', message: 'No pod resolved for this user' });
+      safeSend(ws, { type: 'exit', code: 1, message: 'Pod resolution required' });
+      return null;
+    }
+    const { bin, args, env } = _buildKubectlArgs(validation, podInfo.podName, podInfo.token || token);
+    return _spawnAndStream(ws, bin, args, env, validation.cleanCmd);
+  }
+
+  // Default: Docker mode (backward compatible)
+  const { bin, args, env } = _buildDockerArgs(validation, token);
+  return _spawnAndStream(ws, bin, args, env, validation.cleanCmd);
 }
 
 // ── Express app ────────────────────────────────────────────────────────
@@ -316,7 +430,13 @@ app.delete('/env/:key', (req, res) => {
 
 const server = app.listen(PORT, () => {
   log('info', `Terminal Proxy Server running on port ${PORT}`);
-  log('info', `Connected to OpenClaw container: ${OPENCLAW_CONTAINER}`);
+  if (EXEC_MODE === 'kubectl') {
+    log('info', `Exec mode: kubectl (namespace: ${K8S_NAMESPACE})`);
+    if (ORCHESTRATOR_URL) log('info', `Orchestrator: ${ORCHESTRATOR_URL}`);
+    else log('warn', 'ORCHESTRATOR_URL not set -- pod resolution will fail');
+  } else {
+    log('info', `Exec mode: docker (container: ${OPENCLAW_CONTAINER})`);
+  }
 });
 
 // ── WebSocket server with security options ─────────────────────────────
@@ -365,11 +485,13 @@ wss.on('connection', (ws, req) => {
   let currentProcess = null;
   let authenticated = false;
   let userRole = 'guest';
+  let userId = null;      // Set from JWT `sub` claim (K8s pod routing)
+  let resolvedPod = null;  // Cached pod info for kubectl mode
 
   // Rate limiting state
   let msgTimestamps = [];
 
-  ws.on('message', (message) => {
+  ws.on('message', async (message) => {
     // Rate limiting
     const now = Date.now();
     msgTimestamps = msgTimestamps.filter(t => t > now - MSG_RATE_WINDOW);
@@ -389,24 +511,86 @@ wss.on('connection', (ws, req) => {
             authenticated = true;
             // Gateway token always grants superadmin -- NEVER accept client-supplied role
             userRole = 'superadmin';
-            safeSend(ws, {
-              type: 'auth',
-              status: 'ok',
-              role: userRole,
-              message: 'Authenticated successfully'
-            });
-          } else if (data.jwt && JWT_SECRET) {
-            try {
-              const decoded = jwt.verify(data.jwt, JWT_SECRET);
-              authenticated = true;
-              // Role comes ONLY from verified JWT claims -- NEVER from client-supplied data
-              userRole = decoded.user_role || decoded.role || 'user';
+
+            // In kubectl mode, superadmin can target a specific user's pod
+            // via data.targetUserId.  Without it, commands run against the
+            // default Docker container (backward compatible).
+            if (EXEC_MODE === 'kubectl' && data.targetUserId) {
+              userId = data.targetUserId;
+              resolveUserPod(userId)
+                .then((pod) => {
+                  resolvedPod = pod;
+                  log('info', 'Superadmin targeting user pod', { userId, podName: pod.podName });
+                  safeSend(ws, {
+                    type: 'auth',
+                    status: 'ok',
+                    role: userRole,
+                    message: `Authenticated successfully (targeting pod for ${userId})`
+                  });
+                })
+                .catch((err) => {
+                  log('error', 'Pod resolution failed for targetUserId', { userId, error: err.message });
+                  safeSend(ws, {
+                    type: 'auth',
+                    status: 'ok',
+                    role: userRole,
+                    message: 'Authenticated successfully',
+                    warning: `Could not resolve pod for ${userId}: ${err.message}`
+                  });
+                });
+            } else {
               safeSend(ws, {
                 type: 'auth',
                 status: 'ok',
                 role: userRole,
-                message: 'Authenticated via JWT'
+                message: 'Authenticated successfully'
               });
+            }
+          } else if (data.jwt && JWT_SECRET) {
+            try {
+              const decoded = jwt.verify(data.jwt, JWT_SECRET);
+              authenticated = true;
+              userId = decoded.sub || null;
+
+              // Resolve RBAC role from auth-service (GoTrue JWT only has "authenticated")
+              const rbacRole = await resolveRbacRole(data.jwt);
+              userRole = rbacRole || decoded.user_role || decoded.role || 'user';
+
+              // In kubectl mode, await pod resolution before sending auth ok.
+              // Supports both legacy userId resolution and new openclawId resolution.
+              const openclawId = data.openclawId || null;
+              if (EXEC_MODE === 'kubectl' && (openclawId || userId)) {
+                try {
+                  const pod = openclawId
+                    ? await resolveOpenClawPod(openclawId)
+                    : await resolveUserPod(userId);
+                  resolvedPod = pod;
+                  log('info', 'Pod resolved', { userId, openclawId, podName: pod.podName, role: userRole });
+                  safeSend(ws, {
+                    type: 'auth',
+                    status: 'ok',
+                    role: userRole,
+                    openclawId: openclawId || null,
+                    message: 'Authenticated via JWT (pod ready)'
+                  });
+                } catch (podErr) {
+                  log('error', 'Pod resolution failed at auth', { userId, openclawId, error: podErr.message });
+                  safeSend(ws, {
+                    type: 'auth',
+                    status: 'ok',
+                    role: userRole,
+                    message: 'Authenticated via JWT (pod pending)',
+                    warning: 'Pod not yet available; commands may fail'
+                  });
+                }
+              } else {
+                safeSend(ws, {
+                  type: 'auth',
+                  status: 'ok',
+                  role: userRole,
+                  message: 'Authenticated via JWT'
+                });
+              }
             } catch (jwtErr) {
               safeSend(ws, {
                 type: 'auth',
@@ -458,9 +642,25 @@ wss.on('connection', (ws, req) => {
               command: validation.cleanCmd,
               userRole,
               tier,
+              execMode: EXEC_MODE,
               action: 'command.executed'
             });
-            currentProcess = executeCommand(ws, data.command, GATEWAY_TOKEN);
+
+            // In kubectl mode, resolve pod on-demand if not already cached
+            if (EXEC_MODE === 'kubectl' && userId && !resolvedPod) {
+              resolveUserPod(userId)
+                .then((pod) => {
+                  resolvedPod = pod;
+                  currentProcess = executeCommand(ws, data.command, GATEWAY_TOKEN, resolvedPod);
+                })
+                .catch((err) => {
+                  log('error', 'Pod resolution failed during exec', { userId, error: err.message });
+                  safeSend(ws, { type: 'error', message: `Cannot resolve pod for user: ${err.message}` });
+                  safeSend(ws, { type: 'exit', code: 1, message: 'Pod resolution failed' });
+                });
+            } else {
+              currentProcess = executeCommand(ws, data.command, GATEWAY_TOKEN, resolvedPod);
+            }
           }
           break;
 
@@ -580,9 +780,19 @@ wss.on('connection', (ws, req) => {
           // Run config set for each mapped var sequentially
           const runConfigSet = (configPath, value) => {
             return new Promise((resolve, reject) => {
-              const child = spawn('docker', [
-                'exec', OPENCLAW_CONTAINER, 'openclaw', 'config', 'set', configPath, value,
-              ], { env: { ...process.env, OPENCLAW_GATEWAY_TOKEN: GATEWAY_TOKEN } });
+              let bin, args, env;
+              if (EXEC_MODE === 'kubectl' && resolvedPod && resolvedPod.podName) {
+                bin = 'kubectl';
+                args = ['exec', '-i', resolvedPod.podName, '-n', K8S_NAMESPACE, '--',
+                  'env', `OPENCLAW_GATEWAY_TOKEN=${resolvedPod.token || GATEWAY_TOKEN}`,
+                  'openclaw', 'config', 'set', configPath, value];
+                env = { ...process.env };
+              } else {
+                bin = 'docker';
+                args = ['exec', OPENCLAW_CONTAINER, 'openclaw', 'config', 'set', configPath, value];
+                env = { ...process.env, OPENCLAW_GATEWAY_TOKEN: GATEWAY_TOKEN };
+              }
+              const child = spawn(bin, args, { env });
               let stderr = '';
               child.stderr.on('data', (d) => { stderr += d.toString(); });
               child.on('close', (code) => {
@@ -593,16 +803,34 @@ wss.on('connection', (ws, req) => {
             });
           };
 
-          // Restart gateway container via Docker CLI (the terminal-proxy
-          // has the Docker socket mounted, so docker restart works directly)
+          // Restart gateway -- Docker restarts the container; kubectl does
+          // a rollout restart of the pod's parent deployment.
           const runGatewayRestart = () => {
             return new Promise((resolve, reject) => {
-              const child = spawn('docker', ['restart', OPENCLAW_CONTAINER]);
+              let bin, args;
+              if (EXEC_MODE === 'kubectl' && resolvedPod && resolvedPod.podName) {
+                // kubectl rollout restart targets the deployment, not the pod
+                // Pod names follow the pattern <deployment>-<hash>-<hash>,
+                // but we delete the pod to force a reschedule instead.
+                bin = 'kubectl';
+                args = ['delete', 'pod', resolvedPod.podName, '-n', K8S_NAMESPACE];
+              } else {
+                bin = 'docker';
+                args = ['restart', OPENCLAW_CONTAINER];
+              }
+              const child = spawn(bin, args);
               let stderr = '';
               child.stderr.on('data', (d) => { stderr += d.toString(); });
               child.on('close', (code) => {
-                if (code === 0) resolve();
-                else reject(new Error(`docker restart failed (exit ${code}): ${stderr.trim()}`));
+                if (code === 0) {
+                  // Clear cached pod since it will be replaced
+                  if (EXEC_MODE === 'kubectl' && userId) {
+                    resolvedPod = null;
+                    _podCache.delete(userId);
+                  }
+                  resolve();
+                }
+                else reject(new Error(`restart failed (exit ${code}): ${stderr.trim()}`));
               });
               child.on('error', reject);
             });

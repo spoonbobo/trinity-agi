@@ -1,0 +1,227 @@
+# ─── Supabase PostgreSQL ───────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: supabase-db
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "supabase-db" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  serviceName: supabase-db
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "trinity.selectorLabels" (dict "component" "supabase-db") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "trinity.componentLabels" (dict "component" "supabase-db" "Release" .Release "Chart" .Chart) | nindent 8 }}
+    spec:
+      containers:
+        - name: supabase-db
+          image: {{ include "trinity.image" (dict "image" .Values.supabaseDb.image "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: SUPABASE_POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              value: "supabase"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: migrations
+              mountPath: /docker-entrypoint-initdb.d/rbac
+              readOnly: true
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.supabaseDb.resources | nindent 12 }}
+      volumes:
+        - name: migrations
+          configMap:
+            name: supabase-migrations
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- include "trinity.storageClass" . | nindent 8 }}
+        resources:
+          requests:
+            storage: {{ .Values.supabaseDb.storage }}
+---
+# ─── DB Post-Init Job (runs superuser grants after DB is ready) ────────────
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-init-{{ .Release.Revision }}
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "db-init" "Release" .Release "Chart" .Chart) | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        {{- include "trinity.componentLabels" (dict "component" "db-init" "Release" .Release "Chart" .Chart) | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: db-init
+          image: {{ include "trinity.image" (dict "image" .Values.supabaseDb.image "global" .Values.global) }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              echo "[db-init] Waiting for supabase-db to be ready..."
+              for i in $(seq 1 60); do
+                if pg_isready -h supabase-db -U postgres -q 2>/dev/null; then
+                  echo "[db-init] Database is ready"
+                  break
+                fi
+                echo "[db-init] Waiting... ($i/60)"
+                sleep 5
+              done
+
+              if ! pg_isready -h supabase-db -U postgres -q 2>/dev/null; then
+                echo "[db-init] ERROR: Database not ready after 5 minutes"
+                exit 1
+              fi
+
+              # --- Phase 1: Superuser grants (as supabase_admin) ---
+              echo "[db-init] Running superuser schema setup..."
+              PGPASSWORD="$POSTGRES_PASSWORD" psql -h supabase-db -U supabase_admin -d supabase <<'EOSQL'
+              -- Create keycloak schema
+              CREATE SCHEMA IF NOT EXISTS keycloak AUTHORIZATION postgres;
+              GRANT ALL ON SCHEMA keycloak TO postgres;
+              ALTER DEFAULT PRIVILEGES IN SCHEMA keycloak GRANT ALL ON TABLES TO postgres;
+              ALTER DEFAULT PRIVILEGES IN SCHEMA keycloak GRANT ALL ON SEQUENCES TO postgres;
+
+              -- Create rbac schema
+              CREATE SCHEMA IF NOT EXISTS rbac AUTHORIZATION postgres;
+              GRANT ALL ON SCHEMA rbac TO postgres;
+
+              -- Grant postgres full access to auth schema (for GoTrue migrations)
+              GRANT ALL ON SCHEMA auth TO postgres;
+              GRANT ALL ON ALL TABLES IN SCHEMA auth TO postgres;
+              GRANT ALL ON ALL SEQUENCES IN SCHEMA auth TO postgres;
+              GRANT ALL ON ALL ROUTINES IN SCHEMA auth TO postgres;
+              ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA auth
+                GRANT ALL ON TABLES TO postgres;
+              ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA auth
+                GRANT ALL ON SEQUENCES TO postgres;
+              ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA auth
+                GRANT ALL ON ROUTINES TO postgres;
+              GRANT supabase_auth_admin TO postgres;
+              EOSQL
+              echo "[db-init] Superuser grants completed"
+
+              # --- Phase 2: Run RBAC migrations (as postgres) ---
+              echo "[db-init] Running RBAC migrations..."
+              for f in /migrations/rbac/*.sql; do
+                echo "[db-init] Running $f..."
+                PGPASSWORD="$POSTGRES_PASSWORD" psql -h supabase-db -U postgres -d supabase -f "$f" 2>&1 || true
+              done
+              echo "[db-init] RBAC migrations completed"
+
+              # --- Phase 3: Bootstrap admin user via GoTrue ---
+              echo "[db-init] Bootstrapping admin user..."
+              ADMIN_EMAIL="${SUPERADMIN_EMAIL:-admin@trinity.local}"
+              ADMIN_PASS="${SUPERADMIN_PASSWORD:-admin123}"
+
+              # Wait for supabase-auth to be ready
+              for i in $(seq 1 30); do
+                if wget -qO- http://supabase-auth:9999/health >/dev/null 2>&1; then
+                  echo "[db-init] GoTrue is ready"
+                  break
+                fi
+                echo "[db-init] Waiting for GoTrue... ($i/30)"
+                sleep 5
+              done
+
+              # Try signup (will fail silently if user exists)
+              SIGNUP_RESULT=$(wget -qO- --post-data="{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASS\"}" \
+                --header="Content-Type: application/json" \
+                --header="apikey: $SUPABASE_ANON_KEY" \
+                http://supabase-auth:9999/signup 2>&1) || true
+              echo "[db-init] Signup result: $SIGNUP_RESULT"
+
+              # Extract user ID and assign superadmin role
+              USER_ID=$(echo "$SIGNUP_RESULT" | sed -n 's/.*"sub":"\([^"]*\)".*/\1/p' | head -1)
+              if [ -n "$USER_ID" ]; then
+                echo "[db-init] Assigning superadmin role to user $USER_ID..."
+                PGPASSWORD="$POSTGRES_PASSWORD" psql -h supabase-db -U postgres -d supabase -c "
+                  INSERT INTO rbac.user_roles (user_id, role_id)
+                  SELECT '$USER_ID', r.id FROM rbac.roles r WHERE r.name = 'superadmin'
+                  ON CONFLICT DO NOTHING;
+                " 2>&1
+                echo "[db-init] Admin bootstrap completed"
+              else
+                echo "[db-init] WARN: Could not extract user ID (user may already exist)"
+              fi
+
+              echo "[db-init] All initialization completed successfully"
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: SUPABASE_POSTGRES_PASSWORD
+            - name: SUPABASE_ANON_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: SUPABASE_ANON_KEY
+            - name: SUPERADMIN_EMAIL
+              value: {{ .Values.superadmin.email | default "admin@trinity.local" | quote }}
+            - name: SUPERADMIN_PASSWORD
+              value: {{ .Values.superadmin.password | default "admin123" | quote }}
+          volumeMounts:
+            - name: migrations
+              mountPath: /migrations/rbac
+              readOnly: true
+          resources:
+            limits:
+              memory: 128Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+      volumes:
+        - name: migrations
+          configMap:
+            name: supabase-migrations
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: supabase-db
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "supabase-db" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+      targetPort: postgres
+      name: postgres
+  selector:
+    {{- include "trinity.selectorLabels" (dict "component" "supabase-db") | nindent 4 }}

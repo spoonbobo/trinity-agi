@@ -1,0 +1,12 @@
+apiVersion: v2
+name: openclaw-instance
+description: Per-user OpenClaw gateway instance (Deployment, Service, PVC)
+type: application
+version: 0.1.0
+appVersion: "2026.3.0"
+keywords:
+  - openclaw
+  - gateway
+  - per-user
+maintainers:
+  - name: Trinity AGI

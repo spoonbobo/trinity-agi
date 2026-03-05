@@ -1,0 +1,401 @@
+# ─── Base OpenClaw config (used as template for per-user instances) ────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openclaw-base-config
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.labels" . | nindent 4 }}
+data:
+  openclaw.json: |
+    {
+      "gateway": {
+        "port": 18789,
+        "mode": "local",
+        "bind": "lan",
+        "controlUi": {
+          "dangerouslyAllowHostHeaderOriginFallback": true,
+          "dangerouslyDisableDeviceAuth": true
+        },
+        "auth": {
+          "mode": "token"
+        }
+      },
+      "agents": {
+        "defaults": {
+          "workspace": "/home/node/.openclaw/workspace",
+          "sandbox": {
+            "mode": "off",
+            "scope": "agent"
+          }
+        }
+      },
+      "tools": {
+        "profile": "full",
+        "web": {
+          "search": { "enabled": true },
+          "fetch": { "enabled": true }
+        }
+      },
+      "browser": {
+        "enabled": true,
+        "headless": true,
+        "noSandbox": true
+      }
+    }
+---
+# ─── Nginx configuration ──────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.labels" . | nindent 4 }}
+data:
+  nginx.conf: |
+    worker_processes auto;
+
+    events {
+        worker_connections 1024;
+    }
+
+    http {
+        include       /etc/nginx/mime.types;
+        default_type  application/octet-stream;
+        sendfile      on;
+        keepalive_timeout 65;
+
+        gzip on;
+        gzip_types text/plain text/css application/json application/javascript
+                   text/xml application/xml application/wasm font/woff2
+                   image/svg+xml application/x-font-ttf;
+
+        limit_req_zone $binary_remote_addr zone=auth_limit:10m rate=10r/m;
+        limit_req_zone $binary_remote_addr zone=api_limit:10m rate=100r/m;
+        limit_conn_zone $binary_remote_addr zone=ws_conn:10m;
+
+        # Upstream blocks (resolved at config load time)
+        upstream gateway_proxy {
+            server gateway-proxy:{{ .Values.gatewayProxy.port }};
+        }
+
+        upstream terminal_proxy {
+            server terminal-proxy:{{ .Values.terminalProxy.port }};
+        }
+
+        upstream auth_service {
+            server auth-service:{{ .Values.authService.port }};
+        }
+
+        upstream supabase_auth {
+            server supabase-auth:9999;
+        }
+
+        upstream keycloak_server {
+            server keycloak:8080;
+        }
+
+        server {
+            listen 80;
+            server_name _;
+
+            root /usr/share/nginx/html;
+            index index.html;
+
+            # Security headers
+            add_header X-Frame-Options "DENY" always;
+            add_header X-Content-Type-Options "nosniff" always;
+            add_header X-XSS-Protection "0" always;
+            add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+            add_header Permissions-Policy "camera=(), microphone=(self), geolocation=()" always;
+            add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none';" always;
+            add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+            # Flutter SPA
+            location / {
+                try_files $uri $uri/ /index.html;
+                add_header X-Frame-Options "DENY" always;
+                add_header X-Content-Type-Options "nosniff" always;
+                add_header X-XSS-Protection "0" always;
+                add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+                add_header Permissions-Policy "camera=(), microphone=(self), geolocation=()" always;
+                add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none';" always;
+                add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+                add_header Cache-Control "no-cache, no-store, must-revalidate";
+                add_header Pragma "no-cache";
+            }
+
+            location ~* ^/(index\.html|flutter_bootstrap\.js|flutter_service_worker\.js|version\.json)$ {
+                add_header X-Frame-Options "DENY" always;
+                add_header X-Content-Type-Options "nosniff" always;
+                add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+                add_header Cache-Control "no-cache, no-store, must-revalidate";
+                add_header Pragma "no-cache";
+                try_files $uri =404;
+            }
+
+            location ~* \.(js|wasm|map)$ {
+                add_header X-Content-Type-Options "nosniff" always;
+                add_header Cache-Control "public, max-age=31536000, immutable";
+                try_files $uri =404;
+            }
+
+            location ~* \.(ttf|otf|woff|woff2|eot|svg|png|jpg|ico)$ {
+                add_header X-Content-Type-Options "nosniff" always;
+                add_header Cache-Control "public, max-age=31536000, immutable";
+                try_files $uri =404;
+            }
+
+            # Auth Service
+            location /auth/ {
+                limit_req zone=auth_limit burst=20 nodelay;
+                proxy_pass http://auth_service;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+            }
+
+            # Supabase GoTrue
+            location /supabase/auth/ {
+                limit_req zone=auth_limit burst=20 nodelay;
+                rewrite ^/supabase/auth/(.*)$ /$1 break;
+                proxy_pass http://supabase_auth;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+            }
+
+            # Keycloak
+            location /keycloak/ {
+                proxy_pass http://keycloak_server/keycloak/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_buffer_size 128k;
+                proxy_buffers 4 256k;
+                proxy_busy_buffers_size 256k;
+            }
+
+            # WebSocket -> Gateway Proxy (routes to per-user OpenClaw pods)
+            location /ws {
+                limit_conn ws_conn 50;
+                proxy_pass http://gateway_proxy;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection "upgrade";
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_read_timeout 86400s;
+                proxy_send_timeout 86400s;
+            }
+
+            # Terminal WebSocket
+            location /terminal/ {
+                limit_conn ws_conn 20;
+                proxy_pass http://terminal_proxy;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection "upgrade";
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_read_timeout 86400s;
+                proxy_send_timeout 86400s;
+            }
+
+            # OpenClaw HTTP APIs -> Gateway Proxy
+            location ^~ /__openclaw__/ {
+                limit_req zone=api_limit burst=50 nodelay;
+                client_max_body_size 5m;
+                proxy_pass http://gateway_proxy;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection "upgrade";
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+            }
+
+            location /v1/ {
+                limit_req zone=api_limit burst=50 nodelay;
+                proxy_pass http://gateway_proxy;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+            }
+
+            location /tools/ {
+                limit_req zone=api_limit burst=50 nodelay;
+                proxy_pass http://gateway_proxy;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+            }
+        }
+    }
+---
+# ─── Loki configuration ───────────────────────────────────────────────────
+{{- if .Values.loki.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-config
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.labels" . | nindent 4 }}
+data:
+  local-config.yaml: |
+    auth_enabled: false
+    server:
+      http_listen_port: 3100
+    common:
+      path_prefix: /loki
+      storage:
+        filesystem:
+          chunks_directory: /loki/chunks
+          rules_directory: /loki/rules
+      replication_factor: 1
+      ring:
+        kvstore:
+          store: inmemory
+    schema_config:
+      configs:
+        - from: "2020-10-24"
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+    limits_config:
+      allow_structured_metadata: false
+{{- end }}
+---
+# ─── Keycloak realm import ─────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-realm
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.labels" . | nindent 4 }}
+data:
+  trinity-realm.json: |
+    {
+      "realm": "trinity",
+      "enabled": true,
+      "registrationAllowed": false,
+      "loginWithEmailAllowed": true,
+      "duplicateEmailsAllowed": false,
+      "sslRequired": "external",
+      "passwordPolicy": "length(8) and maxLength(128) and notUsername and notEmail",
+      "clients": [
+        {
+          "clientId": "trinity-shell",
+          "name": "Trinity AGI Shell",
+          "enabled": true,
+          "protocol": "openid-connect",
+          "publicClient": false,
+          "secret": "trinity-shell-secret",
+          "standardFlowEnabled": true,
+          "directAccessGrantsEnabled": false,
+          "redirectUris": ["http://localhost/*", "http://localhost:80/*"],
+          "webOrigins": ["http://localhost"],
+          "attributes": {
+            "post.logout.redirect.uris": "http://localhost/*"
+          }
+        },
+        {
+          "clientId": "account",
+          "enabled": true,
+          "protocol": "openid-connect",
+          "publicClient": true,
+          "standardFlowEnabled": true,
+          "directAccessGrantsEnabled": false,
+          "redirectUris": ["/realms/trinity/account/*"],
+          "webOrigins": ["http://localhost"]
+        }
+      ],
+      "roles": {
+        "realm": [
+          { "name": "trinity_guest", "description": "Guest role" },
+          { "name": "trinity_user", "description": "Standard user" },
+          { "name": "trinity_admin", "description": "Administrator" }
+        ]
+      },
+      "defaultRoles": ["trinity_user"],
+      "components": {}
+    }
+---
+# ─── Vault init script ────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-init-scripts
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.labels" . | nindent 4 }}
+data:
+  init.sh: |
+    #!/bin/sh
+    VAULT_ADDR="${VAULT_ADDR:-http://vault:8200}"
+    VAULT_TOKEN="${VAULT_TOKEN:-root}"
+    export VAULT_ADDR VAULT_TOKEN
+
+    echo "[vault-init] Waiting for Vault to be ready..."
+    count=0
+    while [ $count -lt 30 ]; do
+      if vault status > /dev/null 2>&1; then
+        echo "[vault-init] Vault is ready"
+        break
+      fi
+      sleep 2
+      count=$((count + 1))
+    done
+
+    if [ $count -ge 30 ]; then
+      echo "[vault-init] Timeout waiting for Vault"
+      exit 1
+    fi
+
+    echo "[vault-init] Enabling KV secrets engine..."
+    vault secrets enable -version=2 kv 2>/dev/null \
+      || vault secrets enable -path=secret -version=2 kv 2>/dev/null \
+      || echo "[vault-init] KV engine already enabled (ok)"
+
+    sleep 1
+
+    validate_secret() {
+      local name="$1" value="$2"
+      if [ -z "$value" ] || [ "$value" = "test" ]; then
+        echo "[vault-init] ERROR: $name is unset or uses a test default"
+        return 1
+      fi
+      return 0
+    }
+
+    echo "[vault-init] Writing secrets..."
+
+    if validate_secret "SUPABASE_JWT_SECRET" "$SUPABASE_JWT_SECRET" && \
+       validate_secret "SUPABASE_ANON_KEY" "$SUPABASE_ANON_KEY" && \
+       validate_secret "SUPABASE_POSTGRES_PASSWORD" "$SUPABASE_POSTGRES_PASSWORD"; then
+      vault kv put secret/trinity/supabase \
+        jwt_secret="$SUPABASE_JWT_SECRET" \
+        anon_key="$SUPABASE_ANON_KEY" \
+        postgres_password="$SUPABASE_POSTGRES_PASSWORD" \
+        2>&1 || echo "[vault-init] WARN: failed to write supabase secrets"
+    fi
+
+    if validate_secret "KEYCLOAK_ADMIN_PASSWORD" "$KEYCLOAK_ADMIN_PASSWORD"; then
+      vault kv put secret/trinity/keycloak \
+        admin="$KEYCLOAK_ADMIN_PASSWORD" \
+        client_secret="${KEYCLOAK_CLIENT_SECRET:-}" \
+        2>&1 || echo "[vault-init] WARN: failed to write keycloak secrets"
+    fi
+
+    vault kv put secret/trinity/superadmin \
+      allowlist="${SUPERADMIN_ALLOWLIST:-}" \
+      enabled="${ENABLE_DEFAULT_SUPERADMIN:-false}" \
+      2>&1 || echo "[vault-init] WARN: failed to write superadmin config"
+
+    echo "[vault-init] Secrets configured at $VAULT_ADDR"

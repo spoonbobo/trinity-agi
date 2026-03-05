@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/gateway_client.dart' as gw;
 import '../../core/theme.dart';
 import '../../core/i18n.dart';
+import '../../core/auth_client.dart' show OpenClawInfo, OpenClawStatus;
 import '../../core/providers.dart';
 import '../../core/toast_provider.dart';
 import '../../models/ws_frame.dart';
@@ -104,13 +105,25 @@ class _ShellPageState extends ConsumerState<ShellPage> {
       }
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      final authClient = ref.read(authClientProvider);
       final client = ref.read(gatewayClientProvider);
       // Track connection state changes for reconnect toasts
       _prevGatewayState = client.state;
       client.addListener(_onGatewayStateChange);
-      client.connect().catchError((e) {
-        debugPrint('[Shell] connect failed: $e');
-      });
+      // Listen for OpenClaw status changes (e.g. user gets unassigned)
+      authClient.addListener(_onAuthStateChange);
+      // Only connect if user has an active OpenClaw assigned AND it's confirmed
+      // (openClawStatus == ready means fetchUserOpenClaws validated the list)
+      if (authClient.openClawStatus == OpenClawStatus.ready) {
+        final activeOC = authClient.state.activeOpenClaw;
+        if (activeOC != null) {
+          client.setOpenClawId(activeOC.id);
+          ref.read(terminalClientProvider).setOpenClawId(activeOC.id);
+          client.connect().catchError((e) {
+            debugPrint('[Shell] connect failed: $e');
+          });
+        }
+      }
       _approvalSub = client.approvalEvents.listen((_) {
         if (!_showGovernance && mounted) {
           setState(() => _showGovernance = true);
@@ -124,11 +137,31 @@ class _ShellPageState extends ConsumerState<ShellPage> {
     });
   }
 
+  void _onAuthStateChange() {
+    final authClient = ref.read(authClientProvider);
+    final gwClient = ref.read(gatewayClientProvider);
+
+    if (authClient.openClawStatus == OpenClawStatus.noOpenClaws) {
+      // User lost all assignments -- disconnect
+      gwClient.disconnect();
+      ref.read(terminalClientProvider).disconnect();
+    } else if (authClient.openClawStatus == OpenClawStatus.ready) {
+      final activeOC = authClient.state.activeOpenClaw;
+      if (activeOC != null && gwClient.state == gw.ConnectionState.disconnected) {
+        // User just got assigned -- connect
+        gwClient.setOpenClawId(activeOC.id);
+        ref.read(terminalClientProvider).setOpenClawId(activeOC.id);
+        gwClient.connect().catchError((_) {});
+      }
+    }
+  }
+
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_globalKeyHandler);
     _domKeyDownSub?.cancel();
     _domClickSub?.cancel();
+    ref.read(authClientProvider).removeListener(_onAuthStateChange);
     ref.read(gatewayClientProvider).removeListener(_onGatewayStateChange);
     _approvalSub?.cancel();
     _notifSub?.cancel();
@@ -336,10 +369,47 @@ class _ShellPageState extends ConsumerState<ShellPage> {
     final screenWidth = MediaQuery.of(context).size.width;
     final isMobile = screenWidth < _mobileBreakpoint;
     final isTablet = screenWidth >= _mobileBreakpoint && screenWidth < _tabletBreakpoint;
+    final authClient = ref.watch(authClientProvider);
+    final hasNoOpenClaws = authClient.openClawStatus == OpenClawStatus.noOpenClaws;
 
     // FIX: Both panels use dynamic flex derived from _canvasFlex
     final chatFlex = ((10 - _canvasFlex) * 100).round();
     final canvasFlex = (_canvasFlex * 100).round();
+
+    if (hasNoOpenClaws) {
+      return Scaffold(
+        backgroundColor: t.surfaceBase,
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Trinity icon (4-pointed star from favicon.svg)
+              CustomPaint(
+                size: const Size(48, 48),
+                painter: _TrinityIconPainter(color: t.accentPrimary),
+              ),
+              const SizedBox(height: 16),
+              Text('trinity',
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  color: t.accentPrimary,
+                )),
+              const SizedBox(height: 12),
+              Text('you have no team',
+                style: TextStyle(fontSize: 12, color: t.fgMuted)),
+              const SizedBox(height: 32),
+              GestureDetector(
+                onTap: () => ref.read(authClientProvider).logout(),
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: Text('logout',
+                    style: TextStyle(fontSize: 10, color: t.fgDisabled)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
     return Scaffold(
         body: Stack(
@@ -627,6 +697,25 @@ class _ShellPageState extends ConsumerState<ShellPage> {
                 overflow: TextOverflow.ellipsis),
             ),
           ),
+          // OpenClaw selector badge (always clickable, opens switcher dialog)
+          if (authState.openclaws.isNotEmpty) ...[
+            _OpenClawSelector(
+              openclaws: authState.openclaws,
+              activeId: authState.activeOpenClawId,
+              labelStyle: labelStyle,
+              t: t,
+              onSelect: (id) {
+                if (id == authState.activeOpenClawId) return;
+                final authClient = ref.read(authClientProvider);
+                authClient.selectOpenClaw(id);
+                final gw = ref.read(gatewayClientProvider);
+                gw.disconnect();
+                gw.setOpenClawId(id);
+                ref.read(terminalClientProvider).setOpenClawId(id);
+                gw.connect().catchError((_) {});
+              },
+            ),
+          ],
           if (!isMobile) ...[
             _HoverLabel(text: tr(language, 'memory'), style: labelStyle!, onTap: _showMemoryDialog),
           ],
@@ -689,6 +778,268 @@ class _ShellPageState extends ConsumerState<ShellPage> {
       ),
     );
   }
+}
+
+/// Status bar badge that opens the OpenClaw switcher dialog.
+class _OpenClawSelector extends StatelessWidget {
+  final List<OpenClawInfo> openclaws;
+  final String? activeId;
+  final TextStyle? labelStyle;
+  final ShellTokens t;
+  final ValueChanged<String> onSelect;
+
+  const _OpenClawSelector({
+    required this.openclaws,
+    required this.activeId,
+    required this.labelStyle,
+    required this.t,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final active = openclaws.where((oc) => oc.id == activeId).firstOrNull;
+    return GestureDetector(
+      onTap: () => _showSwitcherDialog(context),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: Container(
+          margin: const EdgeInsets.only(right: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+          decoration: BoxDecoration(
+            borderRadius: kShellBorderRadiusSm,
+            border: Border.all(color: t.border, width: 0.5),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 5, height: 5,
+                margin: const EdgeInsets.only(right: 4),
+                decoration: BoxDecoration(
+                  color: (active?.ready ?? false) ? t.accentPrimary : t.fgDisabled,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              Text(active?.name ?? 'select',
+                style: TextStyle(fontSize: 8, color: t.accentPrimary)),
+              const SizedBox(width: 2),
+              Icon(Icons.unfold_more, size: 8, color: t.fgMuted),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showSwitcherDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      barrierColor: Colors.black54,
+      builder: (_) => _OpenClawSwitcherDialog(
+        openclaws: openclaws,
+        activeId: activeId,
+        onSelect: (id) {
+          Navigator.of(context).pop();
+          onSelect(id);
+        },
+      ),
+    );
+  }
+}
+
+/// Dialog for switching between assigned OpenClaw instances.
+/// Matches the skills/automations dialog layout.
+class _OpenClawSwitcherDialog extends StatelessWidget {
+  final List<OpenClawInfo> openclaws;
+  final String? activeId;
+  final ValueChanged<String> onSelect;
+
+  const _OpenClawSwitcherDialog({
+    required this.openclaws,
+    required this.activeId,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = ShellTokens.of(context);
+    final theme = Theme.of(context);
+
+    return Dialog(
+      backgroundColor: t.surfaceBase,
+      shape: RoundedRectangleBorder(
+        borderRadius: kShellBorderRadius,
+        side: BorderSide(color: t.border, width: 0.5),
+      ),
+      child: Container(
+        width: MediaQuery.of(context).size.width * 0.5,
+        constraints: const BoxConstraints(maxWidth: 520, maxHeight: 480),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // ── Header (matches skills dialog) ─────────────────────────
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: t.border, width: 0.5)),
+              ),
+              child: Row(
+                children: [
+                  Text('openclaws',
+                    style: theme.textTheme.bodyMedium?.copyWith(color: t.accentPrimary)),
+                  const SizedBox(width: 8),
+                  Text('${openclaws.length}',
+                    style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary)),
+                  const Spacer(),
+                  GestureDetector(
+                    onTap: () => Navigator.of(context).pop(),
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.click,
+                      child: Text('close',
+                        style: theme.textTheme.labelSmall?.copyWith(color: t.fgMuted)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // ── Column headers ─────────────────────────────────────────
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: t.border, width: 0.5)),
+              ),
+              child: Row(
+                children: [
+                  const SizedBox(width: 14), // dot space
+                  Expanded(flex: 4, child: Text('name',
+                    style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary, fontSize: 9))),
+                  Expanded(flex: 3, child: Text('description',
+                    style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary, fontSize: 9))),
+                  SizedBox(width: 60, child: Text('users',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary, fontSize: 9))),
+                  SizedBox(width: 60, child: Text('status',
+                    textAlign: TextAlign.right,
+                    style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary, fontSize: 9))),
+                ],
+              ),
+            ),
+            // ── Instance list ──────────────────────────────────────────
+            ...openclaws.map((oc) {
+              final isActive = oc.id == activeId;
+              return GestureDetector(
+                onTap: isActive ? null : () => onSelect(oc.id),
+                child: MouseRegion(
+                  cursor: isActive ? SystemMouseCursors.basic : SystemMouseCursors.click,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: isActive ? t.surfaceCard : Colors.transparent,
+                      border: Border(bottom: BorderSide(color: t.border, width: 0.5)),
+                    ),
+                    child: Row(
+                      children: [
+                        // Status dot
+                        Container(
+                          width: 6, height: 6,
+                          margin: const EdgeInsets.only(right: 8),
+                          decoration: BoxDecoration(
+                            color: oc.ready ? t.accentPrimary : t.fgDisabled,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        // Name
+                        Expanded(
+                          flex: 4,
+                          child: Text(oc.name,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: isActive ? t.accentPrimary : t.fgPrimary,
+                              fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+                            ),
+                            overflow: TextOverflow.ellipsis),
+                        ),
+                        // Description
+                        Expanded(
+                          flex: 3,
+                          child: Text(
+                            oc.description ?? '',
+                            style: theme.textTheme.labelSmall?.copyWith(color: t.fgMuted, fontSize: 9),
+                            overflow: TextOverflow.ellipsis),
+                        ),
+                        // User count with person icon
+                        SizedBox(
+                          width: 60,
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.person_outline, size: 11, color: t.fgMuted),
+                              const SizedBox(width: 2),
+                              Text(
+                                '${oc.userCount ?? '-'}',
+                                style: theme.textTheme.labelSmall?.copyWith(color: t.fgMuted, fontSize: 9),
+                              ),
+                            ],
+                          ),
+                        ),
+                        // Status
+                        SizedBox(
+                          width: 60,
+                          child: Text(
+                            isActive ? 'active' : (oc.ready ? 'ready' : oc.status),
+                            textAlign: TextAlign.right,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: isActive ? t.accentPrimary : t.fgMuted,
+                              fontSize: 9,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }),
+            // ── Empty state ────────────────────────────────────────────
+            if (openclaws.isEmpty)
+              Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text('no openclaws assigned',
+                  style: theme.textTheme.bodySmall?.copyWith(color: t.fgMuted)),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Paints the Trinity 4-pointed star icon (matching favicon.svg).
+class _TrinityIconPainter extends CustomPainter {
+  final Color color;
+  _TrinityIconPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+    // 4-pointed star: top, right, bottom, left with curved edges
+    final path = Path()
+      ..moveTo(cx, 0)
+      ..cubicTo(cx, cx * 0.625, cx * 0.625, cx, 0, cy)
+      ..cubicTo(cx * 0.625, cy, cx, cy + (size.height - cy) * 0.375, cx, size.height)
+      ..cubicTo(cx, cy + (size.height - cy) * 0.375, cx + (size.width - cx) * 0.375, cy, size.width, cy)
+      ..cubicTo(cx + (size.width - cx) * 0.375, cy, cx, cx * 0.625, cx, 0)
+      ..close();
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _TrinityIconPainter old) => old.color != color;
 }
 
 class _HoverLabel extends StatefulWidget {

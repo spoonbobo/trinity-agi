@@ -207,21 +207,24 @@ class FileUploadResult {
 /// HTTP endpoint. Returns the workspace-relative path for use in chat.send messages.
 ///
 /// Protocol: POST raw bytes with metadata in headers.
-///   Authorization: Bearer <gateway-token>
+///   Authorization: Bearer <jwt>
 ///   Content-Type: <mime-type>
 ///   X-File-Name: <url-encoded-filename>
+///
+/// [authToken] is the user's JWT — the gateway proxy swaps it for the
+/// per-user gateway token before forwarding the request.
 Future<FileUploadResult> uploadFileToWorkspace({
   required Uint8List bytes,
   required String fileName,
   required String mimeType,
-  required String gatewayToken,
+  required String authToken,
 }) async {
   // Build the upload URL relative to the current origin
   final uri = Uri.parse('${html.window.location.origin}/__openclaw__/upload');
 
   final request = html.HttpRequest();
   request.open('POST', uri.toString());
-  request.setRequestHeader('Authorization', 'Bearer $gatewayToken');
+  request.setRequestHeader('Authorization', 'Bearer $authToken');
   request.setRequestHeader('Content-Type', mimeType);
   request.setRequestHeader('X-File-Name', Uri.encodeComponent(fileName));
 

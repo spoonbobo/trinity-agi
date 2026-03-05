@@ -1,0 +1,305 @@
+# ─── Supabase RBAC Migration SQL Files ─────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: supabase-migrations
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "supabase-db" "Release" .Release "Chart" .Chart) | nindent 4 }}
+data:
+  001_rbac_schema.sql: |
+    -- RBAC Schema (NIST Level 2: Roles + Permissions + Hierarchy)
+    -- Runs against supabase-db postgres
+
+    CREATE SCHEMA IF NOT EXISTS rbac;
+
+    -- Roles with hierarchy support
+    CREATE TABLE rbac.roles (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name        TEXT UNIQUE NOT NULL,
+      parent_id   UUID REFERENCES rbac.roles(id) ON DELETE SET NULL,
+      description TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- Fine-grained permission actions
+    CREATE TABLE rbac.permissions (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      action      TEXT UNIQUE NOT NULL,
+      description TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- Role <-> Permission mapping
+    CREATE TABLE rbac.role_permissions (
+      role_id       UUID NOT NULL REFERENCES rbac.roles(id) ON DELETE CASCADE,
+      permission_id UUID NOT NULL REFERENCES rbac.permissions(id) ON DELETE CASCADE,
+      PRIMARY KEY (role_id, permission_id)
+    );
+
+    -- User <-> Role mapping (references GoTrue auth.users)
+    CREATE TABLE rbac.user_roles (
+      user_id   UUID NOT NULL,
+      role_id   UUID NOT NULL REFERENCES rbac.roles(id) ON DELETE CASCADE,
+      granted_by UUID,
+      granted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (user_id, role_id)
+    );
+
+    -- Indexes for role hierarchy traversal and role-based lookups
+    CREATE INDEX IF NOT EXISTS idx_roles_parent_id ON rbac.roles(parent_id);
+    CREATE INDEX IF NOT EXISTS idx_user_roles_role_id ON rbac.user_roles(role_id);
+
+    -- Audit log
+    CREATE TABLE rbac.audit_log (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id     UUID,
+      action      TEXT NOT NULL,
+      resource    TEXT,
+      metadata    JSONB DEFAULT '{}',
+      ip          TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX idx_audit_log_user ON rbac.audit_log(user_id);
+    CREATE INDEX idx_audit_log_action ON rbac.audit_log(action);
+    CREATE INDEX idx_audit_log_created ON rbac.audit_log(created_at DESC);
+
+    -- Recursive CTE function: resolve all effective permissions for a user
+    CREATE OR REPLACE FUNCTION rbac.effective_permissions(p_user_id UUID)
+    RETURNS TABLE(action TEXT) AS $$
+      WITH RECURSIVE role_tree AS (
+        -- Direct roles
+        SELECT r.id, r.parent_id
+        FROM rbac.roles r
+        JOIN rbac.user_roles ur ON ur.role_id = r.id
+        WHERE ur.user_id = p_user_id
+        UNION
+        -- Inherited roles (walk up)
+        SELECT r.id, r.parent_id
+        FROM rbac.roles r
+        JOIN role_tree rt ON r.id = rt.parent_id
+      )
+      SELECT DISTINCT p.action
+      FROM role_tree rt
+      JOIN rbac.role_permissions rp ON rp.role_id = rt.id
+      JOIN rbac.permissions p ON p.id = rp.permission_id;
+    $$ LANGUAGE SQL STABLE;
+
+    -- Helper: check if user has a specific permission
+    CREATE OR REPLACE FUNCTION rbac.has_permission(p_user_id UUID, p_action TEXT)
+    RETURNS BOOLEAN AS $$
+      SELECT EXISTS (
+        SELECT 1 FROM rbac.effective_permissions(p_user_id) ep WHERE ep.action = p_action
+      );
+    $$ LANGUAGE SQL STABLE;
+
+    -- Helper: get user's highest role name
+    CREATE OR REPLACE FUNCTION rbac.user_role_name(p_user_id UUID)
+    RETURNS TEXT AS $$
+      SELECT r.name
+      FROM rbac.user_roles ur
+      JOIN rbac.roles r ON r.id = ur.role_id
+      WHERE ur.user_id = p_user_id
+      ORDER BY
+        CASE r.name
+          WHEN 'superadmin' THEN 0
+          WHEN 'admin' THEN 1
+          WHEN 'user' THEN 2
+          WHEN 'guest' THEN 3
+          ELSE 4
+        END
+      LIMIT 1;
+    $$ LANGUAGE SQL STABLE;
+
+  002_seed_roles.sql: |
+    -- Seed: Role hierarchy
+    -- guest -> user -> admin -> superadmin
+    -- Idempotent: uses ON CONFLICT DO NOTHING
+
+    INSERT INTO rbac.roles (name, parent_id, description) VALUES
+      ('guest', NULL, 'Unauthenticated visitor with read-only access')
+      ON CONFLICT (name) DO NOTHING;
+
+    INSERT INTO rbac.roles (name, parent_id, description)
+      SELECT 'user', id, 'Authenticated user with standard operational access'
+      FROM rbac.roles WHERE name = 'guest'
+      ON CONFLICT (name) DO NOTHING;
+
+    INSERT INTO rbac.roles (name, parent_id, description)
+      SELECT 'admin', id, 'Administrator with full configuration and user management'
+      FROM rbac.roles WHERE name = 'user'
+      ON CONFLICT (name) DO NOTHING;
+
+    INSERT INTO rbac.roles (name, parent_id, description)
+      SELECT 'superadmin', id, 'Super administrator with unrestricted system access'
+      FROM rbac.roles WHERE name = 'admin'
+      ON CONFLICT (name) DO NOTHING;
+
+  003_seed_permissions.sql: |
+    -- Seed: Permissions and role-permission bindings
+    -- Idempotent: uses ON CONFLICT DO NOTHING
+
+    -- Insert all permission actions
+    INSERT INTO rbac.permissions (action, description) VALUES
+      -- Chat
+      ('chat.read',                 'View chat messages'),
+      ('chat.send',                 'Send chat messages'),
+      -- Canvas
+      ('canvas.view',               'View canvas/A2UI surfaces'),
+      -- Memory
+      ('memory.read',               'Read workspace memory'),
+      ('memory.write',              'Write workspace memory'),
+      -- Skills
+      ('skills.list',               'List available skills'),
+      ('skills.install',            'Install skills from ClawHub'),
+      ('skills.manage',             'Manage/remove skills'),
+      -- Crons
+      ('crons.list',                'List cron jobs'),
+      ('crons.manage',              'Create/edit/delete cron jobs'),
+      -- Terminal
+      ('terminal.exec.safe',        'Execute safe read-only terminal commands'),
+      ('terminal.exec.standard',    'Execute standard terminal commands'),
+      ('terminal.exec.privileged',  'Execute privileged terminal commands'),
+      -- Settings
+      ('settings.read',             'View settings'),
+      ('settings.admin',            'Modify system settings'),
+      -- Governance
+      ('governance.view',           'View approval requests'),
+      ('governance.resolve',        'Approve/reject governance requests'),
+      -- ACP
+      ('acp.spawn',                 'Spawn ACP agent sessions'),
+      ('acp.manage',                'Manage ACP sessions (cancel/close/steer)'),
+      -- Users
+      ('users.list',                'List users and roles'),
+      ('users.manage',              'Assign/revoke user roles'),
+      -- Audit
+      ('audit.read',                'View audit log')
+    ON CONFLICT (action) DO NOTHING;
+
+    -- Guest permissions (read-only)
+    INSERT INTO rbac.role_permissions (role_id, permission_id)
+      SELECT r.id, p.id
+      FROM rbac.roles r, rbac.permissions p
+      WHERE r.name = 'guest' AND p.action IN (
+        'chat.read',
+        'canvas.view',
+        'memory.read',
+        'skills.list',
+        'crons.list',
+        'settings.read',
+        'governance.view',
+        'terminal.exec.safe'
+      )
+    ON CONFLICT DO NOTHING;
+
+    -- User permissions (standard operational)
+    INSERT INTO rbac.role_permissions (role_id, permission_id)
+      SELECT r.id, p.id
+      FROM rbac.roles r, rbac.permissions p
+      WHERE r.name = 'user' AND p.action IN (
+        'chat.send',
+        'memory.write',
+        'skills.install',
+        'crons.manage',
+        'terminal.exec.standard',
+        'governance.resolve',
+        'acp.spawn'
+      )
+    ON CONFLICT DO NOTHING;
+
+    -- Admin permissions (configuration + management)
+    INSERT INTO rbac.role_permissions (role_id, permission_id)
+      SELECT r.id, p.id
+      FROM rbac.roles r, rbac.permissions p
+      WHERE r.name = 'admin' AND p.action IN (
+        'skills.manage',
+        'terminal.exec.privileged',
+        'settings.admin',
+        'acp.manage',
+        'users.list',
+        'users.manage',
+        'audit.read'
+      )
+    ON CONFLICT DO NOTHING;
+
+  004_seed_default_admin.sql: |
+    -- Seed default superadmin account: admin@trinity.local / admin
+    -- GoTrue auto-confirms email (GOTRUE_MAILER_AUTOCONFIRM=true)
+    -- This migration is idempotent; it only inserts if the user doesn't exist.
+
+    -- Note: GoTrue manages auth.users directly via its API, so we create
+    -- the admin user through GoTrue signup at bootstrap time instead of
+    -- inserting directly into auth.users (which would bypass password hashing).
+    -- See bootstrap-openclaw.sh for the curl call that creates this user.
+    -- This file only assigns the superadmin role once the user exists.
+
+    -- The bootstrap script sets the user_id after signup and runs:
+    --   INSERT INTO rbac.user_roles ...
+    -- This file is kept as documentation of the default admin policy.
+
+  005_openclaw_schema.sql: |
+    -- Admin-managed OpenClaw instances and user assignments.
+    -- Replaces the old per-user rbac.tenants model with shared instances
+    -- that admins create and assign users to.
+
+    -- Drop old per-user tenant table if it exists
+    DROP TABLE IF EXISTS rbac.tenants CASCADE;
+
+    -- ── OpenClaw instances (admin-managed) ──────────────────────────────
+    CREATE TABLE IF NOT EXISTS rbac.openclaws (
+        id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        name            TEXT NOT NULL UNIQUE,
+        description     TEXT,
+        gateway_token   TEXT NOT NULL,
+        pod_name        TEXT,
+        service_name    TEXT,
+        pvc_name        TEXT,
+        namespace       TEXT NOT NULL DEFAULT 'trinity',
+        status          TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending', 'provisioning', 'running', 'error', 'deleting')),
+        error_message   TEXT,
+        port            INTEGER NOT NULL DEFAULT 18789,
+        created_by      UUID,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_openclaws_status ON rbac.openclaws(status);
+    CREATE INDEX IF NOT EXISTS idx_openclaws_name ON rbac.openclaws(name);
+
+    COMMENT ON TABLE rbac.openclaws IS 'Admin-managed OpenClaw gateway instances';
+
+    -- ── User-to-OpenClaw assignments (many-to-many) ─────────────────────
+    CREATE TABLE IF NOT EXISTS rbac.openclaw_assignments (
+        id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id         UUID NOT NULL,
+        openclaw_id     UUID NOT NULL REFERENCES rbac.openclaws(id) ON DELETE CASCADE,
+        assigned_by     UUID,
+        assigned_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE(user_id, openclaw_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_assignments_user ON rbac.openclaw_assignments(user_id);
+    CREATE INDEX IF NOT EXISTS idx_assignments_openclaw ON rbac.openclaw_assignments(openclaw_id);
+
+    COMMENT ON TABLE rbac.openclaw_assignments IS 'Many-to-many user-to-OpenClaw instance assignments';
+
+    -- ── Auto-update timestamp trigger ───────────────────────────────────
+    CREATE OR REPLACE FUNCTION rbac.update_openclaw_timestamp()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        NEW.updated_at = now();
+        RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    DROP TRIGGER IF EXISTS trg_openclaws_updated_at ON rbac.openclaws;
+    CREATE TRIGGER trg_openclaws_updated_at
+        BEFORE UPDATE ON rbac.openclaws
+        FOR EACH ROW
+        EXECUTE FUNCTION rbac.update_openclaw_timestamp();
+
+  # Note: keycloak schema creation and auth schema grants require superuser
+  # privileges. They are handled by the db-init Job (see supabase-db.yaml)
+  # which runs as supabase_admin after the database is ready.

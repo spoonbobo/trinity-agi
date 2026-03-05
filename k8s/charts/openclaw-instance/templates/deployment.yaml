@@ -1,0 +1,82 @@
+# Per-user OpenClaw gateway Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "openclaw.name" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "openclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "openclaw.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "openclaw.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: openclaw
+          image: {{ include "openclaw.image" . }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command:
+            - openclaw
+            - gateway
+            - "--port"
+            - {{ .Values.port | quote }}
+            - "--bind"
+            - "lan"
+          ports:
+            - containerPort: {{ .Values.port }}
+              name: gateway
+          env:
+            - name: OPENCLAW_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "openclaw.name" . }}-token
+                  key: token
+            - name: NODE_ENV
+              value: "production"
+            {{- range .Values.extraEnv }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /home/node/.openclaw
+            - name: config
+              mountPath: /home/node/.openclaw/openclaw.json
+              subPath: openclaw.json
+              readOnly: true
+            - name: dshm
+              mountPath: /dev/shm
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: gateway
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: gateway
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "openclaw.name" . }}-data
+        - name: config
+          configMap:
+            name: {{ include "openclaw.name" . }}-config
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.shmSize }}

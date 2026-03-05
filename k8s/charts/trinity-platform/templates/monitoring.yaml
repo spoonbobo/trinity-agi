@@ -1,0 +1,206 @@
+# ─── Loki ──────────────────────────────────────────────────────────────────
+{{- if .Values.loki.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: loki
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "loki" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  serviceName: loki
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "trinity.selectorLabels" (dict "component" "loki") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "trinity.componentLabels" (dict "component" "loki" "Release" .Release "Chart" .Chart) | nindent 8 }}
+    spec:
+      containers:
+        - name: loki
+          image: {{ include "trinity.image" (dict "image" .Values.loki.image "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args:
+            - -config.file=/etc/loki/local-config.yaml
+            - -validation.allow-structured-metadata=false
+          ports:
+            - containerPort: 3100
+              name: http
+          volumeMounts:
+            - name: config
+              mountPath: /etc/loki/local-config.yaml
+              subPath: local-config.yaml
+              readOnly: true
+            - name: data
+              mountPath: /loki
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.loki.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: loki-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- include "trinity.storageClass" . | nindent 8 }}
+        resources:
+          requests:
+            storage: {{ .Values.loki.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "loki" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 3100
+      targetPort: http
+      name: http
+  selector:
+    {{- include "trinity.selectorLabels" (dict "component" "loki") | nindent 4 }}
+{{- end }}
+---
+# ─── Grafana ───────────────────────────────────────────────────────────────
+{{- if .Values.grafana.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "grafana" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "trinity.selectorLabels" (dict "component" "grafana") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "trinity.componentLabels" (dict "component" "grafana" "Release" .Release "Chart" .Chart) | nindent 8 }}
+      {{- if .Values.vault.agentInjector.enabled }}
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: {{ .Values.vault.agentInjector.role | quote }}
+        vault.hashicorp.com/agent-inject-secret-grafana: "secret/data/trinity/grafana"
+      {{- end }}
+    spec:
+      containers:
+        - name: grafana
+          image: {{ include "trinity.image" (dict "image" .Values.grafana.image "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: "admin"
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: GRAFANA_PASSWORD
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/grafana
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.grafana.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: grafana-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-data
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "grafana" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- include "trinity.storageClass" . | nindent 2 }}
+  resources:
+    requests:
+      storage: {{ .Values.grafana.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "grafana" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 3000
+      targetPort: http
+      name: http
+  selector:
+    {{- include "trinity.selectorLabels" (dict "component" "grafana") | nindent 4 }}
+{{- end }}
+---
+# ─── Fluentd ──────────────────────────────────────────────────────────────
+{{- if .Values.fluentd.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fluentd
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "fluentd" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "trinity.selectorLabels" (dict "component" "fluentd") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "trinity.componentLabels" (dict "component" "fluentd" "Release" .Release "Chart" .Chart) | nindent 8 }}
+    spec:
+      containers:
+        - name: fluentd
+          image: {{ include "trinity.image" (dict "image" .Values.fluentd.image "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          resources:
+            {{- toYaml .Values.fluentd.resources | nindent 12 }}
+{{- end }}

@@ -17,7 +17,6 @@ export default function Navbar() {
           <a href="#how" className="font-mono text-xs tracking-wide text-[#6b6b6b] transition hover:text-[#e5e5e5]">
             HOW IT WORKS
           </a>
-
           <a href="/docs" className="font-mono text-xs tracking-wide text-[#6b6b6b] transition hover:text-[#e5e5e5]">
             DOCS
           </a>

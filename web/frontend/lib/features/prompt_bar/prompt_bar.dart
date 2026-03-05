@@ -142,10 +142,7 @@ class _PromptBarState extends ConsumerState<PromptBar> {
     _templateOverlay = null;
   }
 
-  static const _gatewayToken = String.fromEnvironment(
-    'GATEWAY_TOKEN',
-    defaultValue: 'replace-me-with-a-real-token',
-  );
+
 
   Future<void> _send() async {
     final text = _controller.text.trim();
@@ -177,11 +174,12 @@ class _PromptBarState extends ConsumerState<PromptBar> {
         final uploadFutures = fileAttachments.map((a) async {
           try {
             final bytes = base64Decode(a.base64);
+            final jwt = ref.read(authClientProvider).state.token ?? '';
             final result = await uploadFileToWorkspace(
               bytes: bytes,
               fileName: a.name,
               mimeType: a.mimeType,
-              gatewayToken: _gatewayToken,
+              authToken: jwt,
             );
             if (result.ok && result.path != null) {
               return result.path!;

@@ -41,6 +41,7 @@ class TerminalProxyClient extends ChangeNotifier {
   final String url;
   final GatewayAuth auth;
   String _role;
+  String? _openclawId;
 
   static const int _maxOutputs = 10000;
 
@@ -82,6 +83,11 @@ class TerminalProxyClient extends ChangeNotifier {
   /// Update the role used for terminal proxy authentication.
   void updateRole(String role) {
     _role = role;
+  }
+
+  /// Set the active OpenClaw instance ID for shared-pod routing.
+  void setOpenClawId(String? id) {
+    _openclawId = id;
   }
 
   /// Connect to the terminal proxy and wait for authentication to complete.
@@ -133,8 +139,9 @@ class TerminalProxyClient extends ChangeNotifier {
   void _authenticate() {
     _channel?.sink.add(jsonEncode({
       'type': 'auth',
-      'token': auth.token,
+      'jwt': auth.token,
       'role': _role,
+      if (_openclawId != null) 'openclawId': _openclawId,
     }));
   }
 

@@ -1,0 +1,108 @@
+# ─── Gateway Orchestrator ServiceAccount ──────────────────────────────────
+# Needs to create/delete/watch Pods, Services, PVCs for per-user OpenClaw instances.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gateway-orchestrator
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "gateway-orchestrator" "Release" .Release "Chart" .Chart) | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gateway-orchestrator
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "gateway-orchestrator" "Release" .Release "Chart" .Chart) | nindent 4 }}
+rules:
+  # Manage per-user OpenClaw pods
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["create", "delete", "get", "list", "watch", "patch", "update"]
+  # Manage per-user Services
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["create", "delete", "get", "list", "watch", "patch"]
+  # Manage per-user PVCs
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["create", "delete", "get", "list", "watch"]
+  # Manage per-user ConfigMaps
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "delete", "get", "list", "watch", "patch"]
+  # Manage per-user Secrets (gateway tokens)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "delete", "get", "list", "watch", "patch"]
+  # Read pod status for health checks
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/status"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gateway-orchestrator
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "gateway-orchestrator" "Release" .Release "Chart" .Chart) | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: gateway-orchestrator
+subjects:
+  - kind: ServiceAccount
+    name: gateway-orchestrator
+    namespace: {{ include "trinity.namespace" . }}
+---
+# ─── Terminal Proxy ServiceAccount ────────────────────────────────────────
+# Needs pods/exec to run commands inside per-user OpenClaw pods.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: terminal-proxy
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "terminal-proxy" "Release" .Release "Chart" .Chart) | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: terminal-proxy
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "terminal-proxy" "Release" .Release "Chart" .Chart) | nindent 4 }}
+rules:
+  # Exec into per-user OpenClaw pods
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  # Read pod info for resolution
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  # Resolve deployment names to pods (kubectl exec deployment/... needs this)
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: terminal-proxy
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "terminal-proxy" "Release" .Release "Chart" .Chart) | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: terminal-proxy
+subjects:
+  - kind: ServiceAccount
+    name: terminal-proxy
+    namespace: {{ include "trinity.namespace" . }}

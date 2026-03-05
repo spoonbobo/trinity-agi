@@ -1,0 +1,64 @@
+# Production overlay -- HA, strict security, proper resources
+global:
+  namespace: trinity
+  imagePullPolicy: IfNotPresent
+
+vault:
+  devMode: false
+  storage: 5Gi
+
+supabaseDb:
+  storage: 50Gi
+  resources:
+    limits:
+      memory: 2Gi
+    requests:
+      memory: 1Gi
+      cpu: 500m
+
+keycloak:
+  resources:
+    limits:
+      memory: 1Gi
+    requests:
+      memory: 512Mi
+      cpu: 250m
+
+gatewayOrchestrator:
+  replicas: 2
+  resources:
+    limits:
+      memory: 512Mi
+    requests:
+      memory: 256Mi
+      cpu: 250m
+
+gatewayProxy:
+  replicas: 3
+  resources:
+    limits:
+      memory: 1Gi
+    requests:
+      memory: 512Mi
+      cpu: 500m
+
+loki:
+  storage: 50Gi
+grafana:
+  storage: 10Gi
+
+superadmin:
+  enabled: false
+
+site:
+  enabled: true
+  host: "www.trinity.ai"
+  replicas: 2
+  tlsSecretName: "trinity-site-tls"
+
+ingress:
+  enabled: true
+  host: "app.trinity.ai"
+  tls:
+    enabled: true
+    secretName: "trinity-app-tls"

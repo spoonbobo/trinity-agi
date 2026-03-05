@@ -1,0 +1,182 @@
+# ─── Keycloak ──────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "keycloak" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "trinity.selectorLabels" (dict "component" "keycloak") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "trinity.componentLabels" (dict "component" "keycloak" "Release" .Release "Chart" .Chart) | nindent 8 }}
+      {{- if .Values.vault.agentInjector.enabled }}
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: {{ .Values.vault.agentInjector.role | quote }}
+        vault.hashicorp.com/agent-inject-secret-keycloak: "secret/data/trinity/keycloak"
+        vault.hashicorp.com/agent-inject-secret-supabase: "secret/data/trinity/supabase"
+      {{- end }}
+    spec:
+      containers:
+        - name: keycloak
+          image: {{ include "trinity.image" (dict "image" .Values.keycloak.image "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["/opt/keycloak/bin/kc.sh"]
+          args: ["start-dev", "--import-realm"]
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+            - name: KEYCLOAK_ADMIN
+              value: {{ .Values.keycloak.admin | quote }}
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: KEYCLOAK_ADMIN_PASSWORD
+            - name: KC_DB
+              value: "postgres"
+            - name: KC_DB_URL
+              value: "jdbc:postgresql://supabase-db:5432/supabase"
+            - name: KC_DB_USERNAME
+              value: "postgres"
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: SUPABASE_POSTGRES_PASSWORD
+            - name: KC_DB_SCHEMA
+              value: "keycloak"
+            - name: KC_HTTP_RELATIVE_PATH
+              value: "/keycloak"
+            # Authentik IdP federation
+            - name: AUTHENTIK_ENABLED
+              value: {{ .Values.keycloak.authentik.enabled | quote }}
+            {{- if .Values.keycloak.authentik.enabled }}
+            - name: AUTHENTIK_ISSUER_URL
+              value: {{ .Values.keycloak.authentik.issuerUrl | quote }}
+            - name: AUTHENTIK_CLIENT_ID
+              value: {{ .Values.keycloak.authentik.clientId | quote }}
+            - name: AUTHENTIK_CLIENT_SECRET
+              value: {{ .Values.keycloak.authentik.clientSecret | quote }}
+            - name: AUTHENTIK_SCOPES
+              value: {{ .Values.keycloak.authentik.scopes | quote }}
+            - name: AUTHENTIK_GROUPS_MAPPER_ENABLED
+              value: {{ .Values.keycloak.authentik.groupsMapperEnabled | quote }}
+            - name: AUTHENTIK_DEFAULT_GROUP_VALUE
+              value: {{ .Values.keycloak.authentik.defaultGroupValue | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: realm-import
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /keycloak/realms/master
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /keycloak/realms/master
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+          resources:
+            {{- toYaml .Values.keycloak.resources | nindent 12 }}
+      volumes:
+        - name: realm-import
+          configMap:
+            name: keycloak-realm
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "keycloak" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: http
+      name: http
+  selector:
+    {{- include "trinity.selectorLabels" (dict "component" "keycloak") | nindent 4 }}
+---
+# ─── Keycloak IdP Bootstrap Job ───────────────────────────────────────────
+{{- if .Values.keycloak.authentik.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: keycloak-idp-bootstrap-{{ .Release.Revision }}
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "keycloak-idp-bootstrap" "Release" .Release "Chart" .Chart) | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "trinity.componentLabels" (dict "component" "keycloak-idp-bootstrap" "Release" .Release "Chart" .Chart) | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: bootstrap
+          image: {{ include "trinity.image" (dict "image" .Values.keycloak.image "global" .Values.global) }}
+          command: ["/bin/sh", "/scripts/configure-authentik-idp.sh"]
+          env:
+            - name: KEYCLOAK_SERVER_URL
+              value: "http://keycloak:8080/keycloak"
+            - name: KEYCLOAK_REALM
+              value: "trinity"
+            - name: KEYCLOAK_ADMIN_REALM
+              value: "master"
+            - name: KEYCLOAK_ADMIN
+              value: {{ .Values.keycloak.admin | quote }}
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: KEYCLOAK_ADMIN_PASSWORD
+            - name: AUTHENTIK_ENABLED
+              value: {{ .Values.keycloak.authentik.enabled | quote }}
+            - name: AUTHENTIK_ISSUER_URL
+              value: {{ .Values.keycloak.authentik.issuerUrl | quote }}
+            - name: AUTHENTIK_CLIENT_ID
+              value: {{ .Values.keycloak.authentik.clientId | quote }}
+            - name: AUTHENTIK_CLIENT_SECRET
+              value: {{ .Values.keycloak.authentik.clientSecret | quote }}
+            - name: AUTHENTIK_SCOPES
+              value: {{ .Values.keycloak.authentik.scopes | quote }}
+            - name: AUTHENTIK_GROUPS_MAPPER_ENABLED
+              value: {{ .Values.keycloak.authentik.groupsMapperEnabled | quote }}
+            - name: AUTHENTIK_DEFAULT_GROUP_VALUE
+              value: {{ .Values.keycloak.authentik.defaultGroupValue | quote }}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+          resources:
+            limits:
+              memory: 256Mi
+      volumes:
+        - name: scripts
+          configMap:
+            name: keycloak-bootstrap-scripts
+{{- end }}

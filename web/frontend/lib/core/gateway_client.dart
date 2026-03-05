@@ -13,6 +13,17 @@ enum ConnectionState { disconnected, connecting, connected, error }
 class GatewayClient extends ChangeNotifier {
   final String url;
   final GatewayAuth auth;
+  String? openclawId;
+
+  /// Update the auth token (e.g. when the JWT is refreshed).
+  void updateToken(String newToken) {
+    auth.updateToken(newToken);
+  }
+
+  /// Set the active OpenClaw instance ID for shared-pod routing.
+  void setOpenClawId(String? id) {
+    openclawId = id;
+  }
 
   WebSocketChannel? _channel;
   ConnectionState _state = ConnectionState.disconnected;
@@ -44,7 +55,17 @@ class GatewayClient extends ChangeNotifier {
     notifyListeners();
 
     try {
-      _channel = WebSocketChannel.connect(Uri.parse(url));
+      // Append JWT as query parameter for the gateway-proxy to authenticate
+      // the upgrade request. Browsers cannot send custom headers during WS.
+      final wsUri = Uri.parse(url);
+      final authedUri = auth.token != null
+          ? wsUri.replace(queryParameters: {
+              ...wsUri.queryParameters,
+              'token': auth.token!,
+              if (openclawId != null) 'openclaw': openclawId!,
+            })
+          : wsUri;
+      _channel = WebSocketChannel.connect(authedUri);
       await _channel!.ready;
       _channel!.stream.listen(
         _onMessage,

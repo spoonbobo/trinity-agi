@@ -1,0 +1,104 @@
+# ─── Gateway Orchestrator (manages per-user OpenClaw pods) ─────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway-orchestrator
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "gateway-orchestrator" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  replicas: {{ .Values.gatewayOrchestrator.replicas }}
+  selector:
+    matchLabels:
+      {{- include "trinity.selectorLabels" (dict "component" "gateway-orchestrator") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "trinity.componentLabels" (dict "component" "gateway-orchestrator" "Release" .Release "Chart" .Chart) | nindent 8 }}
+      {{- if .Values.vault.agentInjector.enabled }}
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: {{ .Values.vault.agentInjector.role | quote }}
+        vault.hashicorp.com/agent-inject-secret-supabase: "secret/data/trinity/supabase"
+        vault.hashicorp.com/agent-inject-secret-orchestrator: "secret/data/trinity/orchestrator"
+      {{- end }}
+    spec:
+      serviceAccountName: gateway-orchestrator
+      containers:
+        - name: gateway-orchestrator
+          image: {{ include "trinity.image" (dict "image" .Values.gatewayOrchestrator.image "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ .Values.gatewayOrchestrator.port }}
+              name: http
+          env:
+            - name: PORT
+              value: {{ .Values.gatewayOrchestrator.port | quote }}
+            - name: NAMESPACE
+              value: {{ include "trinity.namespace" . }}
+            - name: SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: ORCHESTRATOR_SERVICE_TOKEN
+            - name: POSTGRES_HOST
+              value: "supabase-db"
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB
+              value: "supabase"
+            - name: POSTGRES_USER
+              value: "postgres"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: SUPABASE_POSTGRES_PASSWORD
+            - name: OPENCLAW_IMAGE
+              value: {{ include "trinity.image" (dict "image" "openclaw:local" "global" .Values.global) }}
+            - name: OPENCLAW_CHART_PATH
+              value: {{ .Values.gatewayOrchestrator.openclawChartPath | quote }}
+            {{- if .Values.global.storageClass }}
+            - name: STORAGE_CLASS
+              value: {{ .Values.global.storageClass | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: openclaw-chart
+              mountPath: /charts/openclaw-instance
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.gatewayOrchestrator.resources | nindent 12 }}
+      volumes:
+        - name: openclaw-chart
+          configMap:
+            name: openclaw-instance-chart
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway-orchestrator
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "gateway-orchestrator" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.gatewayOrchestrator.port }}
+      targetPort: http
+      name: http
+  selector:
+    {{- include "trinity.selectorLabels" (dict "component" "gateway-orchestrator") | nindent 4 }}

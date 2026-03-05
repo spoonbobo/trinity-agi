@@ -11,9 +11,10 @@ import 'admin_rbac_tab.dart';
 import 'admin_sessions_tab.dart';
 import 'admin_env_tab.dart';
 import 'admin_channels_tab.dart';
+import 'admin_openclaws_tab.dart';
 import '../onboarding/onboarding_wizard.dart';
 
-enum AdminTab { users, audit, health, rbac, sessions, channels, env, setup }
+enum AdminTab { users, audit, health, rbac, sessions, channels, openclaws, env, setup }
 
 class AdminDialog extends ConsumerStatefulWidget {
   final AdminTab initialTab;
@@ -74,6 +75,8 @@ class _AdminDialogState extends ConsumerState<AdminDialog> {
                     const SizedBox(width: 12),
                     _tabToggle(tr(language, 'channels'), AdminTab.channels),
                     const SizedBox(width: 12),
+                    _tabToggle('openclaws', AdminTab.openclaws),
+                    const SizedBox(width: 12),
                     _tabToggle(tr(language, 'env'), AdminTab.env),
                     const SizedBox(width: 12),
                     _tabToggle(tr(language, 'setup'), AdminTab.setup),
@@ -125,6 +128,8 @@ class _AdminDialogState extends ConsumerState<AdminDialog> {
         return const AdminSessionsTab();
       case AdminTab.channels:
         return const AdminChannelsTab();
+      case AdminTab.openclaws:
+        return const AdminOpenClawsTab();
       case AdminTab.env:
         return const AdminEnvTab();
       case AdminTab.setup:

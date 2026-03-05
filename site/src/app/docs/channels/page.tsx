@@ -9,7 +9,7 @@ export default function ChannelsPage() {
           Channels
         </h1>
         <p className="font-sans text-lg text-[#8b8b8b]">
-          Connect to Trinity AGI through multiple interfaces.
+          Multiple interfaces feed the same agent &mdash; web shell, messaging platforms, and API.
         </p>
       </div>
 
@@ -17,41 +17,47 @@ export default function ChannelsPage() {
         <h2 className="mb-6 font-sans text-2xl font-semibold text-[#e5e5e5]">
           Available Channels
         </h2>
-        
         <div className="space-y-4">
           {[
             {
-              name: "Web Shell",
-              icon: "🌐",
-              desc: "Browser-based chat interface. The primary way to interact with Trinity AGI.",
+              name: "Web Shell (Flutter)",
+              icon: "~",
+              desc: "The primary interface. A blank canvas with a prompt bar, chat stream, A2UI canvas panel, session management, command palette (Ctrl+K), and admin panel. Connects to the agent via WebSocket.",
             },
             {
-              name: "REST API",
-              icon: "🔌",
-              desc: "HTTP endpoints for programmatic access. Perfect for building custom integrations.",
+              name: "WebSocket API",
+              icon: ">",
+              desc: "Direct WebSocket connection to the OpenClaw gateway on /ws. Supports the full protocol: chat, tool execution, streaming, A2UI surfaces, governance approvals.",
             },
             {
-              name: "WebSocket",
-              icon: "⚡",
-              desc: "Real-time bidirectional communication. Supports streaming responses.",
+              name: "REST / OpenAI-compatible API",
+              icon: "/",
+              desc: "HTTP endpoints at /v1/ provide OpenAI-compatible chat completions. Use any OpenAI SDK or HTTP client to interact with the agent programmatically.",
             },
             {
-              name: "Telegram",
-              icon: "✈️",
-              desc: "Connect via Telegram bot. Bring the brain to your messaging app.",
+              name: "Terminal Proxy",
+              icon: "$",
+              desc: "WebSocket bridge at /terminal/ for executing OpenClaw CLI commands. Supports status, doctor, config, skills, cron, hooks, and more -- with RBAC tier gating.",
             },
             {
-              name: "Discord",
-              icon: "🎮",
-              desc: "Add Trinity AGI as a Discord bot. Works with your existing server.",
+              name: "Webhooks",
+              icon: "!",
+              desc: "HTTP endpoints that external services can call to trigger agent actions. Wake endpoint (POST /__openclaw__/webhook/wake), agent endpoint, and custom mapped webhooks.",
+            },
+            {
+              name: "Messaging Platforms",
+              icon: "@",
+              desc: "WhatsApp, Telegram, Discord -- connect via OpenClaw channel skills. All messaging feeds the same agent brain. Supports polls and interactive messages.",
             },
           ].map((channel) => (
             <div
               key={channel.name}
               className="rounded-xl border border-[#2a2a2a] bg-[#141414] p-6"
             >
-              <div className="flex items-center gap-3 mb-2">
-                <span className="text-xl">{channel.icon}</span>
+              <div className="mb-2 flex items-center gap-3">
+                <span className="flex h-8 w-8 items-center justify-center rounded border border-[#2a2a2a] bg-[#0a0a0a] font-mono text-sm text-[#6ee7b7]">
+                  {channel.icon}
+                </span>
                 <h3 className="font-mono text-xs tracking-[2px] text-[#6ee7b7]">
                   {channel.name.toUpperCase()}
                 </h3>
@@ -64,22 +70,37 @@ export default function ChannelsPage() {
 
       <div className="mt-12">
         <h2 className="mb-6 font-sans text-2xl font-semibold text-[#e5e5e5]">
-          Enabling Channels
+          Nginx Route Map
         </h2>
-        <p className="mb-6 font-sans text-sm text-[#8b8b8b]">
-          Configure which channels to enable in your environment:
-        </p>
-        <div className="rounded-xl border border-[#2a2a2a] bg-[#141414] p-6">
-          <pre className="overflow-x-auto font-mono text-sm text-[#8b8b8b]">
-            <code>{`# .env configuration
-CHANNELS=web,api,websocket,telegram,discord
-
-# Telegram bot
-TELEGRAM_BOT_TOKEN=...
-
-# Discord bot
-DISCORD_BOT_TOKEN=...`}</code>
-          </pre>
+        <div className="rounded-xl border border-[#2a2a2a] bg-[#141414] p-6 overflow-x-auto">
+          <table className="w-full font-mono text-xs text-[#8b8b8b]">
+            <thead>
+              <tr className="border-b border-[#2a2a2a] text-left text-[#6ee7b7]">
+                <th className="pb-3 pr-4">Route</th>
+                <th className="pb-3 pr-4">Backend</th>
+                <th className="pb-3">Protocol</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#1a1a1a]">
+              {[
+                ["/", "Flutter SPA (static)", "HTTP"],
+                ["/ws", "OpenClaw gateway", "WebSocket"],
+                ["/terminal/", "terminal-proxy", "WebSocket"],
+                ["/auth/", "auth-service", "HTTP"],
+                ["/supabase/auth/", "supabase-auth (GoTrue)", "HTTP"],
+                ["/keycloak/", "keycloak", "HTTP"],
+                ["/__openclaw__/", "OpenClaw gateway", "HTTP/WS"],
+                ["/v1/", "OpenClaw gateway", "HTTP"],
+                ["/tools/", "OpenClaw gateway", "HTTP"],
+              ].map(([route, backend, proto]) => (
+                <tr key={route}>
+                  <td className="py-2 pr-4 text-[#e5e5e5]">{route}</td>
+                  <td className="py-2 pr-4">{backend}</td>
+                  <td className="py-2">{proto}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>

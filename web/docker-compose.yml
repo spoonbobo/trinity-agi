@@ -360,7 +360,6 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
         TERMINAL_WS_URL: ws://localhost/terminal/
         AUTH_SERVICE_URL: http://localhost
         SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:?Set SUPABASE_ANON_KEY in .env}

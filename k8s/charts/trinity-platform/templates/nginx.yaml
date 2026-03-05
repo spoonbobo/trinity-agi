@@ -1,0 +1,82 @@
+{{- if .Values.nginx.enabled }}
+# ─── Nginx (internal reverse proxy + SPA host) ────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "nginx" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  replicas: {{ .Values.nginx.replicas }}
+  selector:
+    matchLabels:
+      {{- include "trinity.selectorLabels" (dict "component" "nginx") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "trinity.componentLabels" (dict "component" "nginx" "Release" .Release "Chart" .Chart) | nindent 8 }}
+    spec:
+      containers:
+        - name: nginx
+          image: {{ include "trinity.image" (dict "image" .Values.nginx.image "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: 80
+              name: http
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: frontend
+              mountPath: /usr/share/nginx/html
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.nginx.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: nginx-config
+        - name: frontend
+          emptyDir: {}
+      initContainers:
+        # Copy frontend static files from the frontend image
+        - name: frontend-copy
+          image: {{ include "trinity.image" (dict "image" .Values.frontend.image "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["sh", "-c", "cp -r /app/build/web/* /frontend/ 2>/dev/null || echo 'WARN: no frontend build found'"]
+          volumeMounts:
+            - name: frontend
+              mountPath: /frontend
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "nginx" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: http
+      name: http
+  selector:
+    {{- include "trinity.selectorLabels" (dict "component" "nginx") | nindent 4 }}
+{{- end }}

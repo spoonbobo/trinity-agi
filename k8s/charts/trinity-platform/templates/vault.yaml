@@ -1,0 +1,185 @@
+# ─── HashiCorp Vault ───────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vault
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "vault" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "trinity.selectorLabels" (dict "component" "vault") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "trinity.componentLabels" (dict "component" "vault" "Release" .Release "Chart" .Chart) | nindent 8 }}
+    spec:
+      containers:
+        - name: vault
+          image: {{ include "trinity.image" (dict "image" .Values.vault.image "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          {{- if not .Values.vault.devMode }}
+          command: ["vault", "server", "-config=/vault/config/config.hcl"]
+          {{- end }}
+          ports:
+            - containerPort: 8200
+              name: http
+          env:
+            - name: VAULT_ADDR
+              value: "http://0.0.0.0:8200"
+            {{- if .Values.vault.devMode }}
+            - name: VAULT_DEV_ROOT_TOKEN_ID
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: VAULT_TOKEN
+            {{- end }}
+            - name: VAULT_UI
+              value: "false"
+          securityContext:
+            capabilities:
+              add: ["IPC_LOCK"]
+          livenessProbe:
+            exec:
+              command: ["vault", "status", "-address=http://127.0.0.1:8200"]
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command: ["vault", "status", "-address=http://127.0.0.1:8200"]
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 5
+          {{- if not .Values.vault.devMode }}
+          volumeMounts:
+            - name: vault-data
+              mountPath: /vault/data
+            - name: vault-config
+              mountPath: /vault/config
+              readOnly: true
+          {{- end }}
+          resources:
+            {{- toYaml .Values.vault.resources | nindent 12 }}
+      {{- if not .Values.vault.devMode }}
+      volumes:
+        - name: vault-data
+          persistentVolumeClaim:
+            claimName: vault-data
+        - name: vault-config
+          configMap:
+            name: vault-config
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "vault" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8200
+      targetPort: http
+      name: http
+  selector:
+    {{- include "trinity.selectorLabels" (dict "component" "vault") | nindent 4 }}
+{{- if not .Values.vault.devMode }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vault-data
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "vault" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- include "trinity.storageClass" . | nindent 2 }}
+  resources:
+    requests:
+      storage: {{ .Values.vault.storage }}
+{{- end }}
+---
+# ─── Vault Init Job ───────────────────────────────────────────────────────
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vault-init-{{ .Release.Revision }}
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "vault-init" "Release" .Release "Chart" .Chart) | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "trinity.componentLabels" (dict "component" "vault-init" "Release" .Release "Chart" .Chart) | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: vault-init
+          image: {{ include "trinity.image" (dict "image" .Values.vault.image "global" .Values.global) }}
+          command: ["/bin/sh", "/vault/scripts/init.sh"]
+          env:
+            - name: VAULT_ADDR
+              value: "http://vault:8200"
+            - name: VAULT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: VAULT_TOKEN
+            - name: SUPABASE_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: SUPABASE_JWT_SECRET
+            - name: SUPABASE_ANON_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: SUPABASE_ANON_KEY
+            - name: SUPABASE_POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: SUPABASE_POSTGRES_PASSWORD
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: KEYCLOAK_ADMIN_PASSWORD
+            - name: KEYCLOAK_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: KEYCLOAK_CLIENT_SECRET
+            - name: SUPERADMIN_ALLOWLIST
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-superadmin
+                  key: SUPERADMIN_ALLOWLIST
+            - name: ENABLE_DEFAULT_SUPERADMIN
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-superadmin
+                  key: ENABLE_DEFAULT_SUPERADMIN
+          volumeMounts:
+            - name: scripts
+              mountPath: /vault/scripts
+              readOnly: true
+          resources:
+            limits:
+              memory: 128Mi
+      volumes:
+        - name: scripts
+          configMap:
+            name: vault-init-scripts

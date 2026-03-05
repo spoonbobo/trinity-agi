@@ -1,0 +1,13 @@
+apiVersion: v2
+name: trinity-platform
+description: Trinity AGI shared platform services (Supabase, Vault, Keycloak, auth, proxy, orchestrator, monitoring)
+type: application
+version: 0.1.0
+appVersion: "2026.3.0"
+keywords:
+  - trinity
+  - agi
+  - openclaw
+  - platform
+maintainers:
+  - name: Trinity AGI

@@ -1,0 +1,66 @@
+{{- if .Values.site.enabled }}
+# ─── Marketing Site (Next.js) ──────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: site
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "site" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  replicas: {{ .Values.site.replicas }}
+  selector:
+    matchLabels:
+      {{- include "trinity.selectorLabels" (dict "component" "site") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "trinity.componentLabels" (dict "component" "site" "Release" .Release "Chart" .Chart) | nindent 8 }}
+    spec:
+      containers:
+        - name: site
+          image: {{ include "trinity.image" (dict "image" .Values.site.image "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ .Values.site.port }}
+              name: http
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: HOSTNAME
+              value: "0.0.0.0"
+            - name: PORT
+              value: {{ .Values.site.port | quote }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.site.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: site
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "site" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  type: {{ if .Values.site.host }}ClusterIP{{ else }}NodePort{{ end }}
+  ports:
+    - port: {{ .Values.site.port }}
+      targetPort: http
+      name: http
+  selector:
+    {{- include "trinity.selectorLabels" (dict "component" "site") | nindent 4 }}
+{{- end }}

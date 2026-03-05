@@ -11,13 +11,21 @@ class DeviceIdentity {
 }
 
 class GatewayAuth {
-  final String token;
+  /// Current JWT token — updated when the auth session refreshes.
+  String _token;
   final DeviceIdentity device;
 
-  const GatewayAuth({required this.token, required this.device});
+  GatewayAuth({required String token, required this.device}) : _token = token;
+
+  String get token => _token;
+
+  /// Update the JWT token (e.g. after a token refresh).
+  void updateToken(String newToken) {
+    _token = newToken;
+  }
 
   Map<String, dynamic> toConnectParams(String? nonce) => {
-        'auth': {'token': token},
+        'auth': {'token': _token},
         'device': {
           'id': device.id,
           'publicKey': device.id,
