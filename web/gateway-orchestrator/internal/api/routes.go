@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"sync"
+	"time"
 
 	"github.com/gorilla/mux"
 
@@ -49,6 +51,10 @@ func NewRouter(store *db.Store, k8s *k8sclient.Client, serviceToken, namespace, 
 	r.HandleFunc("/openclaws/{id}/resolve", h.handleResolveOpenClaw).Methods(http.MethodGet)
 	r.HandleFunc("/openclaws/{id}/config", h.handleGetConfig).Methods(http.MethodGet)
 	r.HandleFunc("/openclaws/{id}/config", h.handlePatchConfig).Methods(http.MethodPatch)
+
+	// Fleet-wide aggregation (admin)
+	r.HandleFunc("/openclaws/fleet/health", h.handleFleetHealth).Methods(http.MethodGet)
+	r.HandleFunc("/openclaws/fleet/sessions", h.handleFleetSessions).Methods(http.MethodGet)
 
 	// User assignment management (admin)
 	r.HandleFunc("/openclaws/{id}/assign", h.handleAssignUser).Methods(http.MethodPost)
@@ -412,6 +418,148 @@ func (h *Handler) handleUserOpenClaws(w http.ResponseWriter, r *http.Request) {
 		list = []db.UserOpenClaw{}
 	}
 	writeJSON(w, http.StatusOK, list)
+}
+
+// ── Fleet Aggregation ───────────────────────────────────────────────────
+
+type clawHealth struct {
+	ID        string                 `json:"id"`
+	Name      string                 `json:"name"`
+	Status    string                 `json:"status"`
+	PodStatus string                 `json:"podStatus,omitempty"`
+	Ready     bool                   `json:"ready"`
+	Gateway   map[string]interface{} `json:"gateway,omitempty"`
+	Error     string                 `json:"error,omitempty"`
+}
+
+func (h *Handler) handleFleetHealth(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	claws, err := h.store.ListOpenClaws(ctx)
+	if err != nil {
+		log.Printf("ERROR fleet health: list claws: %v", err)
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to list instances"})
+		return
+	}
+
+	results := make([]clawHealth, len(claws))
+	var wg sync.WaitGroup
+	for i := range claws {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			oc := &claws[idx]
+			ch := clawHealth{ID: oc.ID, Name: oc.Name, Status: oc.Status}
+
+			// Pod status
+			podStatus, err := h.k8s.GetOpenClawPodStatus(ctx, oc)
+			if err != nil {
+				ch.Error = fmt.Sprintf("pod status: %v", err)
+				results[idx] = ch
+				return
+			}
+			ch.PodStatus = podStatus
+			ch.Ready = podStatus == "Running/ready"
+
+			// Rich gateway status (only if pod is ready)
+			if ch.Ready {
+				podName, err := h.k8s.FindPodName(ctx, oc)
+				if err == nil {
+					execCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+					defer cancel()
+					output, err := h.k8s.ExecInPod(execCtx, podName, []string{"openclaw", "status", "--json"})
+					if err == nil {
+						var parsed map[string]interface{}
+						if json.Unmarshal([]byte(output), &parsed) == nil {
+							ch.Gateway = parsed
+						}
+					} else {
+						ch.Error = fmt.Sprintf("exec: %v", err)
+					}
+				}
+			}
+			results[idx] = ch
+		}(i)
+	}
+	wg.Wait()
+	writeJSON(w, http.StatusOK, map[string]interface{}{"claws": results})
+}
+
+type clawSessions struct {
+	ID       string                   `json:"id"`
+	Name     string                   `json:"name"`
+	Count    int                      `json:"count"`
+	Sessions []map[string]interface{} `json:"sessions,omitempty"`
+	Error    string                   `json:"error,omitempty"`
+}
+
+func (h *Handler) handleFleetSessions(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	claws, err := h.store.ListOpenClaws(ctx)
+	if err != nil {
+		log.Printf("ERROR fleet sessions: list claws: %v", err)
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to list instances"})
+		return
+	}
+
+	results := make([]clawSessions, len(claws))
+	totalSessions := 0
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for i := range claws {
+		oc := &claws[i]
+		if oc.Status != "running" {
+			results[i] = clawSessions{ID: oc.ID, Name: oc.Name, Error: "not running"}
+			continue
+		}
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			oc := &claws[idx]
+			cs := clawSessions{ID: oc.ID, Name: oc.Name}
+
+			podName, err := h.k8s.FindPodName(ctx, oc)
+			if err != nil {
+				cs.Error = fmt.Sprintf("find pod: %v", err)
+				results[idx] = cs
+				return
+			}
+
+			execCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			output, err := h.k8s.ExecInPod(execCtx, podName, []string{"openclaw", "sessions", "--json"})
+			if err != nil {
+				cs.Error = fmt.Sprintf("exec: %v", err)
+				results[idx] = cs
+				return
+			}
+
+			var parsed map[string]interface{}
+			if json.Unmarshal([]byte(output), &parsed) == nil {
+				if sessions, ok := parsed["sessions"].([]interface{}); ok {
+					cs.Count = len(sessions)
+					for _, s := range sessions {
+						if m, ok := s.(map[string]interface{}); ok {
+							cs.Sessions = append(cs.Sessions, m)
+						}
+					}
+				}
+				if count, ok := parsed["count"].(float64); ok {
+					cs.Count = int(count)
+				}
+			}
+
+			mu.Lock()
+			totalSessions += cs.Count
+			mu.Unlock()
+			results[idx] = cs
+		}(i)
+	}
+	wg.Wait()
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"claws":         results,
+		"totalSessions": totalSessions,
+	})
 }
 
 // ── Config Management ───────────────────────────────────────────────────

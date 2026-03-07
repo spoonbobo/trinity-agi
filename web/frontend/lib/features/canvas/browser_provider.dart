@@ -313,9 +313,10 @@ class BrowserNotifier extends StateNotifier<BrowserState> {
       final screenshotPath = result['path'] as String?;
       if (screenshotPath == null || screenshotPath.isEmpty) return;
 
-      // Step 2: Fetch the screenshot image via nginx's direct volume mount.
-      // nginx serves /__openclaw__/browser-media/ from the openclaw-data
-      // volume's media/browser/ directory (read-only).
+      // Step 2: Fetch the screenshot image.
+      // In Docker Compose, nginx serves this directly from a shared volume.
+      // In K8s, the request goes through gateway-proxy which requires auth.
+      // We always send auth headers to work in both environments.
       final filename = screenshotPath.split('/').last;
       final imageUrl =
           '${client.browserBaseUrl}/__openclaw__/browser-media/$filename';
@@ -324,6 +325,10 @@ class BrowserNotifier extends StateNotifier<BrowserState> {
         imageUrl,
         method: 'GET',
         responseType: 'arraybuffer',
+        requestHeaders: {
+          'Authorization': 'Bearer ${client.auth.token}',
+          if (client.openclawId != null) 'X-OpenClaw-Id': client.openclawId!,
+        },
       );
       if (_disposed) return;
       if (imgResp.status == 200) {

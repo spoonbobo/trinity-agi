@@ -61,7 +61,7 @@ func main() {
 
 	// Initialize service components
 	store := db.NewStore(pool)
-	k8sClient := k8sclient.NewClient(clientset, namespace)
+	k8sClient := k8sclient.NewClient(clientset, config, namespace)
 
 	// Build router
 	router := api.NewRouter(store, k8sClient, serviceToken, namespace, openclawImage, storageClass)

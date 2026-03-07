@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"regexp"
@@ -13,6 +14,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/remotecommand"
 
 	"trinity-agi/gateway-orchestrator/internal/db"
 )
@@ -20,13 +24,15 @@ import (
 // Client wraps the Kubernetes clientset and provides resource operations.
 type Client struct {
 	clientset kubernetes.Interface
+	config    *rest.Config
 	namespace string
 }
 
 // NewClient creates a new Kubernetes client wrapper.
-func NewClient(clientset kubernetes.Interface, namespace string) *Client {
+func NewClient(clientset kubernetes.Interface, config *rest.Config, namespace string) *Client {
 	return &Client{
 		clientset: clientset,
+		config:    config,
 		namespace: namespace,
 	}
 }
@@ -387,12 +393,79 @@ func (c *Client) GetOpenClawPodStatus(ctx context.Context, oc *db.OpenClaw) (str
 		return "no-pods", nil
 	}
 
-	pod := pods.Items[0]
-	phase := string(pod.Status.Phase)
-	for _, cond := range pod.Status.Conditions {
+	// Prefer Running pods over Terminating/Pending during rollouts
+	var bestPod *corev1.Pod
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Status.Phase == corev1.PodRunning {
+			bestPod = p
+			break
+		}
+	}
+	if bestPod == nil {
+		bestPod = &pods.Items[0]
+	}
+
+	phase := string(bestPod.Status.Phase)
+	for _, cond := range bestPod.Status.Conditions {
 		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
 			return phase + "/ready", nil
 		}
 	}
 	return phase + "/not-ready", nil
+}
+
+// ── Pod Exec ────────────────────────────────────────────────────────────
+
+// FindPodName returns the name of a running pod for an OpenClaw instance.
+// Prefers Running/Ready pods over others to handle rollouts correctly.
+func (c *Client) FindPodName(ctx context.Context, oc *db.OpenClaw) (string, error) {
+	labelSelector := fmt.Sprintf("trinity.ai/openclaw-id=%s,app.kubernetes.io/name=openclaw-instance", oc.ID)
+	pods, err := c.clientset.CoreV1().Pods(c.namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+	if err != nil {
+		return "", fmt.Errorf("list pods for %s: %w", oc.Name, err)
+	}
+	if len(pods.Items) == 0 {
+		return "", fmt.Errorf("no pods found for %s", oc.Name)
+	}
+	// Prefer Running pods; during rollouts there may be Terminating + Pending pods
+	for _, pod := range pods.Items {
+		if pod.Status.Phase == corev1.PodRunning {
+			return pod.Name, nil
+		}
+	}
+	// Fallback to first pod if none are Running yet
+	return pods.Items[0].Name, nil
+}
+
+// ExecInPod runs a command inside a pod and returns stdout.
+func (c *Client) ExecInPod(ctx context.Context, podName string, command []string) (string, error) {
+	req := c.clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(podName).
+		Namespace(c.namespace).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: "openclaw",
+			Command:   command,
+			Stdout:    true,
+			Stderr:    true,
+		}, scheme.ParameterCodec)
+
+	exec, err := remotecommand.NewSPDYExecutor(c.config, "POST", req.URL())
+	if err != nil {
+		return "", fmt.Errorf("create executor for %s: %w", podName, err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+	if err != nil {
+		return "", fmt.Errorf("exec in %s: %w (stderr: %s)", podName, err, stderr.String())
+	}
+	return stdout.String(), nil
 }

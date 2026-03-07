@@ -5,7 +5,7 @@ import '../../core/theme.dart';
 import '../../core/i18n.dart';
 import '../../core/toast_provider.dart';
 import '../../core/cron_utils.dart';
-import '../../main.dart' show languageProvider;
+import '../../main.dart' show authClientProvider, languageProvider;
 import '../../core/providers.dart' show terminalClientProvider;
 
 enum AutomationTab { crons, hooks, webhooks, polls }
@@ -56,6 +56,9 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
   List<int> _selectedDays = [0]; // 0=Mon
   int _dayOfMonth = 1;
   int _oneShotMinutes = 20;
+
+  // -- Cron templates state (from filesystem, not cron list) --
+  List<Map<String, dynamic>> _cronTemplates = [];
 
   // -- Hooks state --
   List<Map<String, dynamic>> _hooks = [];
@@ -159,9 +162,17 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
           .map((e) => e.map((k, v) => MapEntry(k.toString(), v)))
           .toList();
 
+      // Load cron templates from filesystem (separate from cron jobs)
+      final templatesRaw = await client.executeCommandForOutput(
+        'cat /home/node/.openclaw/cron-templates/*.json',
+        timeout: const Duration(seconds: 10),
+      ).catchError((_) => '');
+      final templates = _parseConcatenatedJson(templatesRaw);
+
       if (!mounted) return;
       setState(() {
         _cronJobs = jobs;
+        _cronTemplates = templates;
         _hooks = hooks;
         _healthData = healthJson;
         _cronPage = 0;
@@ -175,6 +186,48 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
       if (!mounted) return;
       setState(() => _loading = false);
     }
+  }
+
+  /// Parse concatenated JSON objects from `cat *.json` output.
+  /// Each file is a separate JSON object; they are concatenated without
+  /// separators. We split on `}\n{` boundaries and also handle system
+  /// message lines ($ cat ...) from the terminal proxy.
+  List<Map<String, dynamic>> _parseConcatenatedJson(String raw) {
+    final stripped = _stripAnsi(raw).trim();
+    if (stripped.isEmpty) return [];
+
+    final results = <Map<String, dynamic>>[];
+    // Remove terminal proxy system messages (lines starting with "$ ")
+    final cleaned = stripped
+        .split('\n')
+        .where((l) => !l.startsWith('\$ ') && !l.startsWith('Command '))
+        .join('\n')
+        .trim();
+    if (cleaned.isEmpty) return [];
+
+    // Strategy: find each top-level JSON object by tracking brace depth
+    int depth = 0;
+    int start = -1;
+    for (int i = 0; i < cleaned.length; i++) {
+      final ch = cleaned[i];
+      if (ch == '{') {
+        if (depth == 0) start = i;
+        depth++;
+      } else if (ch == '}') {
+        depth--;
+        if (depth == 0 && start >= 0) {
+          final fragment = cleaned.substring(start, i + 1);
+          try {
+            final parsed = jsonDecode(fragment);
+            if (parsed is Map<String, dynamic>) {
+              results.add(parsed);
+            }
+          } catch (_) {}
+          start = -1;
+        }
+      }
+    }
+    return results;
   }
 
   // ---------------------------------------------------------------------------
@@ -197,6 +250,9 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
       case CronCategory.existing:
         return _cronJobs.where((j) => !_isCronTemplate(j)).toList();
       case CronCategory.templates:
+        // Use filesystem-loaded templates; fall back to filtering cron jobs
+        // for backward compatibility with gateways that register templates as jobs
+        if (_cronTemplates.isNotEmpty) return _cronTemplates;
         return _cronJobs.where(_isCronTemplate).toList();
     }
   }
@@ -498,6 +554,11 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
                   _tabToggle(tr(language, 'webhooks'), AutomationTab.webhooks),
                   const SizedBox(width: 12),
                   _tabToggle(tr(language, 'polls'), AutomationTab.polls),
+                  const SizedBox(width: 8),
+                  Text(
+                    ref.watch(authClientProvider).state.activeOpenClaw?.name ?? '',
+                    style: theme.textTheme.labelSmall?.copyWith(color: t.accentSecondary, fontSize: 9),
+                  ),
                   const SizedBox(width: 12),
                   if (_loading)
                     Text('loading...', style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary)),

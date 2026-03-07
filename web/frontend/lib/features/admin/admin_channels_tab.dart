@@ -5,6 +5,7 @@ import '../../core/theme.dart';
 import '../../core/toast_provider.dart';
 import '../../core/terminal_client.dart';
 import '../../core/providers.dart' show terminalClientProvider, createScopedTerminalClient;
+import '../../main.dart' show authClientProvider;
 import '../terminal/terminal_view.dart';
 
 // ---------------------------------------------------------------------------
@@ -523,6 +524,11 @@ class _AdminChannelsTabState extends ConsumerState<AdminChannelsTab> {
               Text(
                 'channels ($configuredCount configured)',
                 style: theme.textTheme.bodyMedium?.copyWith(color: t.fgPrimary),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                ref.watch(authClientProvider).state.activeOpenClaw?.name ?? '',
+                style: theme.textTheme.labelSmall?.copyWith(color: t.accentSecondary, fontSize: 9),
               ),
               const SizedBox(width: 12),
               if (_loading)

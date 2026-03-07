@@ -65,3 +65,13 @@ flutter:
           weight: 700
         - asset: fonts/Geist-RegularItalic.ttf
           style: italic
+    # --- CJK + symbol fallback fonts ---
+    - family: NotoSansSC
+      fonts:
+        - asset: fonts/NotoSansSC-Regular.otf
+    - family: NotoSansTC
+      fonts:
+        - asset: fonts/NotoSansTC-Regular.otf
+    - family: NotoSans
+      fonts:
+        - asset: fonts/NotoSans-Regular.ttf

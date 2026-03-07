@@ -210,6 +210,54 @@ router.get('/openclaws/all', async (req, res) => {
   }
 });
 
+// ── Fleet Aggregation (admin+) ──────────────────────────────────────────
+
+// GET /auth/openclaws/fleet/health - fleet-wide health aggregation
+router.get('/openclaws/fleet/health', async (req, res) => {
+  try {
+    if (!['admin', 'superadmin'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+
+    const orchRes = await fetch(`${ORCHESTRATOR_URL}/openclaws/fleet/health`, {
+      headers: { Authorization: `Bearer ${ORCHESTRATOR_SERVICE_TOKEN}` },
+    });
+
+    if (!orchRes.ok) {
+      const body = await orchRes.text();
+      return res.status(orchRes.status).json({ error: body || 'Failed to get fleet health' });
+    }
+
+    res.json(await orchRes.json());
+  } catch (err) {
+    console.error('[auth] Fleet health error:', err);
+    res.status(500).json({ error: 'Failed to get fleet health' });
+  }
+});
+
+// GET /auth/openclaws/fleet/sessions - fleet-wide session aggregation
+router.get('/openclaws/fleet/sessions', async (req, res) => {
+  try {
+    if (!['admin', 'superadmin'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+
+    const orchRes = await fetch(`${ORCHESTRATOR_URL}/openclaws/fleet/sessions`, {
+      headers: { Authorization: `Bearer ${ORCHESTRATOR_SERVICE_TOKEN}` },
+    });
+
+    if (!orchRes.ok) {
+      const body = await orchRes.text();
+      return res.status(orchRes.status).json({ error: body || 'Failed to get fleet sessions' });
+    }
+
+    res.json(await orchRes.json());
+  } catch (err) {
+    console.error('[auth] Fleet sessions error:', err);
+    res.status(500).json({ error: 'Failed to get fleet sessions' });
+  }
+});
+
 // ── Admin: User Assignment ──────────────────────────────────────────────
 
 // POST /auth/openclaws/:id/assign - assign user to OpenClaw (admin+)

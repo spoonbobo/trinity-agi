@@ -713,8 +713,11 @@ class _ShellPageState extends ConsumerState<ShellPage> {
                 final gw = ref.read(gatewayClientProvider);
                 gw.disconnect();
                 gw.setOpenClawId(id);
-                ref.read(terminalClientProvider).setOpenClawId(id);
+                final tp = ref.read(terminalClientProvider);
+                tp.disconnect();
+                tp.setOpenClawId(id);
                 gw.connect().catchError((_) {});
+                tp.connect().catchError((_) {});
               },
             ),
           ],

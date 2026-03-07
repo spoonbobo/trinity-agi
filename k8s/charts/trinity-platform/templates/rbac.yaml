@@ -36,10 +36,13 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create", "delete", "get", "list", "watch", "patch"]
-  # Read pod status for health checks
+  # Read pod status for health checks + exec for fleet aggregation
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
   - apiGroups: [""]
     resources: ["pods/status"]
     verbs: ["get"]

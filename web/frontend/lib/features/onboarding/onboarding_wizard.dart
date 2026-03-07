@@ -4,6 +4,7 @@ import '../../core/theme.dart';
 import '../../core/terminal_client.dart';
 import '../terminal/terminal_view.dart';
 import '../../core/providers.dart' show terminalClientProvider;
+import '../../main.dart' show authClientProvider;
 
 enum OnboardingStep { welcome, status, configure, terminal }
 
@@ -160,6 +161,12 @@ class _OnboardingWizardState extends ConsumerState<OnboardingWizard> {
               color: t.fgPrimary,
             ),
           ),
+          const SizedBox(width: 8),
+          Consumer(builder: (context, ref, _) {
+            final clawName = ref.watch(authClientProvider).state.activeOpenClaw?.name ?? '';
+            return Text(clawName,
+                style: theme.textTheme.labelSmall?.copyWith(color: t.accentSecondary, fontSize: 9));
+          }),
           const SizedBox(width: 16),
           ...OnboardingStep.values.map((step) {
             final isActive = step == _currentStep;
@@ -267,7 +274,7 @@ class _OnboardingWizardState extends ConsumerState<OnboardingWizard> {
           _buildFeatureLine('terminal', 'run OpenClaw commands from browser'),
           const SizedBox(height: 24),
           Text(
-            'The wizard will connect to the OpenClaw Gateway running in Docker.',
+            'The wizard will connect to the active OpenClaw Gateway.',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: t.fgTertiary,
             ),

@@ -5,7 +5,7 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import '../../core/theme.dart';
 import '../../core/i18n.dart';
 import '../../core/toast_provider.dart';
-import '../../main.dart' show languageProvider;
+import '../../main.dart' show authClientProvider, languageProvider;
 import '../../core/providers.dart' show terminalClientProvider;
 
 enum SkillsCategory { ready, clawhub, templates }
@@ -715,6 +715,11 @@ class _SkillsDialogState extends ConsumerState<SkillsDialog> {
                   Text(
                     tr(language, 'skills'),
                     style: theme.textTheme.bodyMedium?.copyWith(color: t.accentPrimary),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    ref.watch(authClientProvider).state.activeOpenClaw?.name ?? '',
+                    style: theme.textTheme.labelSmall?.copyWith(color: t.accentSecondary, fontSize: 9),
                   ),
                   const SizedBox(width: 12),
                   if (_loading)

@@ -16,7 +16,6 @@ const ACTIONS = Object.freeze({
   AUTH_LOGIN_FAILED:      'auth.login.failed',
   AUTH_TOKEN_EXPIRED:     'auth.token.expired',
   AUTH_GUEST_ISSUED:      'auth.guest.issued',
-  AUTH_SESSION_CREATE:    'auth.session.create',
 
   // ── RBAC mutations ─────────────────────────────────────────────────
   ROLE_ASSIGNED:          'role.assigned',

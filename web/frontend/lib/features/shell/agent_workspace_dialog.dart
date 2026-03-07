@@ -254,12 +254,24 @@ class _AgentWorkspaceDialogState extends ConsumerState<AgentWorkspaceDialog> {
     return workspace.replaceFirst('~', '/home/node');
   }
 
-  Future<void> _loadMemory() async {
+  Future<void> _loadMemory({int retries = 1}) async {
     final client = ref.read(terminalClientProvider);
     setState(() { _memLoading = true; _memError = null; });
     try {
+      // Ensure terminal proxy is connected and authenticated
       if (!client.isConnected || !client.isAuthenticated) {
         await client.connect();
+        // Wait for auth handshake to complete
+        int waitMs = 0;
+        while (!client.isAuthenticated && waitMs < 3000) {
+          await Future.delayed(const Duration(milliseconds: 200));
+          waitMs += 200;
+        }
+      }
+      if (!client.isAuthenticated) {
+        if (!mounted) return;
+        setState(() { _memError = 'terminal proxy not authenticated'; });
+        return;
       }
       final workspace = _resolveWorkspace(_memoryAgentId);
       final raw = await client.executeCommandForOutput(
@@ -267,12 +279,23 @@ class _AgentWorkspaceDialogState extends ConsumerState<AgentWorkspaceDialog> {
         timeout: const Duration(seconds: 20),
       );
       if (!mounted) return;
-      setState(() {
-        _memContent = raw.trim().isEmpty ? '(empty)' : raw.trimRight();
-        _memLoaded = true;
-      });
+      // Filter out error frames from terminal proxy in the output
+      final lines = raw.split('\n')
+          .where((l) => !l.contains('Invalid JSON') && !l.contains('Not authenticated'))
+          .join('\n')
+          .trim();
+      if (lines.isEmpty) {
+        setState(() { _memContent = '(empty)'; _memLoaded = true; });
+      } else {
+        setState(() { _memContent = lines; _memLoaded = true; });
+      }
     } catch (e) {
       if (!mounted) return;
+      // Retry once if the terminal proxy wasn't ready
+      if (retries > 0 && '$e'.contains('Not connected')) {
+        await Future.delayed(const Duration(milliseconds: 1000));
+        if (mounted) return _loadMemory(retries: retries - 1);
+      }
       setState(() { _memError = '$e'; });
     } finally {
       if (mounted) setState(() => _memLoading = false);

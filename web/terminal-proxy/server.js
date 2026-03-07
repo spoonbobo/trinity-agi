@@ -36,7 +36,20 @@ const ENV_BLOCKLIST = new Set([
   'EXEC_MODE', 'ORCHESTRATOR_URL', 'ORCHESTRATOR_SERVICE_TOKEN', 'NAMESPACE',
 ]);
 
+// envOverrides is now keyed by scope: { "_global": {...}, "oc:<id>": {...} }
+// Docker mode uses "_global". Kubectl mode uses "oc:<openclawId>" with "_global" as fallback.
 let envOverrides = {};
+
+function _envScopeKey(openclawId) {
+  return openclawId ? `oc:${openclawId}` : '_global';
+}
+
+function getEnvForScope(openclawId) {
+  const global = envOverrides['_global'] || {};
+  if (!openclawId) return { ...global };
+  const scoped = envOverrides[_envScopeKey(openclawId)] || {};
+  return { ...global, ...scoped };
+}
 
 // ── Env-to-gateway-config mapping ──────────────────────────────────────
 // Maps environment variable names to OpenClaw config paths. Used by the
@@ -57,8 +70,20 @@ function loadEnvOverrides() {
       const raw = fs.readFileSync(ENV_OVERRIDES_PATH, 'utf8');
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        envOverrides = parsed;
-        log('info', `Loaded ${Object.keys(envOverrides).length} env override(s) from disk`);
+        // Migrate flat format (old single-claw) to scoped format
+        const keys = Object.keys(parsed);
+        const isScoped = keys.some(k => k.startsWith('oc:') || k === '_global');
+        if (isScoped || keys.length === 0) {
+          envOverrides = parsed;
+        } else {
+          // Old flat format: move everything under _global
+          envOverrides = { '_global': parsed };
+          log('info', 'Migrated flat env overrides to scoped format');
+          saveEnvOverrides();
+        }
+        const totalScopes = Object.keys(envOverrides).length;
+        const totalVars = Object.values(envOverrides).reduce((n, scope) => n + Object.keys(scope || {}).length, 0);
+        log('info', `Loaded ${totalVars} env override(s) across ${totalScopes} scope(s) from disk`);
       }
     }
   } catch (err) {
@@ -232,7 +257,7 @@ function validateCommand(cmd) {
 
 // ── Command execution ──────────────────────────────────────────────────
 // Build the argv array for Docker mode.
-function _buildDockerArgs(validation, token) {
+function _buildDockerArgs(validation, token, openclawId) {
   const args = ['exec'];
 
   if (validation.isInteractive) {
@@ -240,7 +265,8 @@ function _buildDockerArgs(validation, token) {
   }
 
   // Inject dynamic env var overrides as -e flags (before container name)
-  for (const [k, v] of Object.entries(envOverrides)) {
+  const scopedEnv = getEnvForScope(openclawId);
+  for (const [k, v] of Object.entries(scopedEnv)) {
     args.push('-e', `${k}=${v}`);
   }
 
@@ -257,13 +283,14 @@ function _buildDockerArgs(validation, token) {
 }
 
 // Build the argv array for kubectl mode.
-function _buildKubectlArgs(validation, podName, podToken) {
+function _buildKubectlArgs(validation, podName, podToken, openclawId) {
   const args = ['exec', '-i', podName, '-n', K8S_NAMESPACE, '--'];
 
   // kubectl exec doesn't support -e for env injection, so we prefix the
   // command with env KEY=VAL ... to achieve the same effect.
+  const scopedEnv = getEnvForScope(openclawId);
   const envPrefix = [];
-  for (const [k, v] of Object.entries(envOverrides)) {
+  for (const [k, v] of Object.entries(scopedEnv)) {
     envPrefix.push(`${k}=${v}`);
   }
   // Always inject the per-user gateway token
@@ -317,7 +344,8 @@ function _spawnAndStream(ws, bin, args, env, cleanCmd) {
 
 // Main entry point -- dispatches to Docker or kubectl depending on EXEC_MODE.
 // When using kubectl, podInfo must be pre-resolved via resolveUserPod().
-function executeCommand(ws, cmd, token, podInfo) {
+// openclawId is used to scope env overrides to the correct claw.
+function executeCommand(ws, cmd, token, podInfo, openclawId) {
   const validation = validateCommand(cmd);
 
   // Auth check FIRST, before revealing command validation details
@@ -339,12 +367,12 @@ function executeCommand(ws, cmd, token, podInfo) {
       safeSend(ws, { type: 'exit', code: 1, message: 'Pod resolution required' });
       return null;
     }
-    const { bin, args, env } = _buildKubectlArgs(validation, podInfo.podName, podInfo.token || token);
+    const { bin, args, env } = _buildKubectlArgs(validation, podInfo.podName, podInfo.token || token, openclawId);
     return _spawnAndStream(ws, bin, args, env, validation.cleanCmd);
   }
 
   // Default: Docker mode (backward compatible)
-  const { bin, args, env } = _buildDockerArgs(validation, token);
+  const { bin, args, env } = _buildDockerArgs(validation, token, openclawId);
   return _spawnAndStream(ws, bin, args, env, validation.cleanCmd);
 }
 
@@ -389,12 +417,14 @@ app.get('/commands', (req, res) => {
 });
 
 // Get/set dynamic environment variable overrides (superadmin via gateway token)
+// Optional ?openclawId= query param to scope to a specific claw
 app.get('/env', (req, res) => {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!timingSafeTokenCompare(token, GATEWAY_TOKEN)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  res.json({ vars: { ...envOverrides } });
+  const ocId = req.query.openclawId || null;
+  res.json({ vars: getEnvForScope(ocId) });
 });
 
 app.put('/env', (req, res) => {
@@ -402,14 +432,16 @@ app.put('/env', (req, res) => {
   if (!timingSafeTokenCompare(token, GATEWAY_TOKEN)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  const { key, value } = req.body;
+  const { key, value, openclawId } = req.body;
   const keyErr = validateEnvKey(key);
   if (keyErr) return res.status(400).json({ error: keyErr });
   const valErr = validateEnvValue(value);
   if (valErr) return res.status(400).json({ error: valErr });
-  envOverrides[key] = String(value);
+  const scopeKey = _envScopeKey(openclawId || null);
+  if (!envOverrides[scopeKey]) envOverrides[scopeKey] = {};
+  envOverrides[scopeKey][key] = String(value);
   saveEnvOverrides();
-  log('info', 'Env override set via REST', { key, action: 'env.set' });
+  log('info', 'Env override set via REST', { key, scope: scopeKey, action: 'env.set' });
   res.json({ status: 'ok', key, value: String(value) });
 });
 
@@ -419,12 +451,17 @@ app.delete('/env/:key', (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   const { key } = req.params;
-  if (!(key in envOverrides)) {
+  const ocId = req.query.openclawId || null;
+  const scopeKey = _envScopeKey(ocId);
+  const scope = envOverrides[scopeKey] || {};
+  if (!(key in scope)) {
     return res.status(404).json({ error: `Key "${key}" not found` });
   }
-  delete envOverrides[key];
+  delete scope[key];
+  if (Object.keys(scope).length === 0) delete envOverrides[scopeKey];
+  else envOverrides[scopeKey] = scope;
   saveEnvOverrides();
-  log('info', 'Env override deleted via REST', { key, action: 'env.delete' });
+  log('info', 'Env override deleted via REST', { key, scope: scopeKey, action: 'env.delete' });
   res.json({ status: 'ok', key });
 });
 
@@ -486,6 +523,7 @@ wss.on('connection', (ws, req) => {
   let authenticated = false;
   let userRole = 'guest';
   let userId = null;      // Set from JWT `sub` claim (K8s pod routing)
+  let openclawId = null;  // Set from auth handshake (per-claw routing)
   let resolvedPod = null;  // Cached pod info for kubectl mode
 
   // Rate limiting state
@@ -511,6 +549,7 @@ wss.on('connection', (ws, req) => {
             authenticated = true;
             // Gateway token always grants superadmin -- NEVER accept client-supplied role
             userRole = 'superadmin';
+            openclawId = data.openclawId || null;
 
             // In kubectl mode, superadmin can target a specific user's pod
             // via data.targetUserId.  Without it, commands run against the
@@ -558,7 +597,7 @@ wss.on('connection', (ws, req) => {
 
               // In kubectl mode, await pod resolution before sending auth ok.
               // Supports both legacy userId resolution and new openclawId resolution.
-              const openclawId = data.openclawId || null;
+              openclawId = data.openclawId || null;
               if (EXEC_MODE === 'kubectl' && (openclawId || userId)) {
                 try {
                   const pod = openclawId
@@ -647,19 +686,22 @@ wss.on('connection', (ws, req) => {
             });
 
             // In kubectl mode, resolve pod on-demand if not already cached
-            if (EXEC_MODE === 'kubectl' && userId && !resolvedPod) {
-              resolveUserPod(userId)
+            if (EXEC_MODE === 'kubectl' && !resolvedPod && (openclawId || userId)) {
+              const resolveFn = openclawId
+                ? () => resolveOpenClawPod(openclawId)
+                : () => resolveUserPod(userId);
+              resolveFn()
                 .then((pod) => {
                   resolvedPod = pod;
-                  currentProcess = executeCommand(ws, data.command, GATEWAY_TOKEN, resolvedPod);
+                  currentProcess = executeCommand(ws, data.command, GATEWAY_TOKEN, resolvedPod, openclawId);
                 })
                 .catch((err) => {
-                  log('error', 'Pod resolution failed during exec', { userId, error: err.message });
-                  safeSend(ws, { type: 'error', message: `Cannot resolve pod for user: ${err.message}` });
+                  log('error', 'Pod resolution failed during exec', { openclawId, userId, error: err.message });
+                  safeSend(ws, { type: 'error', message: `Cannot resolve pod: ${err.message}` });
                   safeSend(ws, { type: 'exit', code: 1, message: 'Pod resolution failed' });
                 });
             } else {
-              currentProcess = executeCommand(ws, data.command, GATEWAY_TOKEN, resolvedPod);
+              currentProcess = executeCommand(ws, data.command, GATEWAY_TOKEN, resolvedPod, openclawId);
             }
           }
           break;
@@ -697,9 +739,11 @@ wss.on('connection', (ws, req) => {
             safeSend(ws, { type: 'env_set', status: 'error', message: valErr });
             break;
           }
-          envOverrides[data.key] = String(data.value);
+          const scopeKey = _envScopeKey(openclawId);
+          if (!envOverrides[scopeKey]) envOverrides[scopeKey] = {};
+          envOverrides[scopeKey][data.key] = String(data.value);
           saveEnvOverrides();
-          log('info', 'Env override set', { key: data.key, userRole, action: 'env.set' });
+          log('info', 'Env override set', { key: data.key, scope: scopeKey, userRole, action: 'env.set' });
           safeSend(ws, { type: 'env_set', status: 'ok', key: data.key, value: String(data.value) });
           break;
         }
@@ -717,13 +761,17 @@ wss.on('connection', (ws, req) => {
             safeSend(ws, { type: 'env_delete', status: 'error', message: 'Key is required' });
             break;
           }
-          if (!(data.key in envOverrides)) {
+          const delScopeKey = _envScopeKey(openclawId);
+          const delScope = envOverrides[delScopeKey] || {};
+          if (!(data.key in delScope)) {
             safeSend(ws, { type: 'env_delete', status: 'error', message: `Key "${data.key}" not found` });
             break;
           }
-          delete envOverrides[data.key];
+          delete delScope[data.key];
+          if (Object.keys(delScope).length === 0) delete envOverrides[delScopeKey];
+          else envOverrides[delScopeKey] = delScope;
           saveEnvOverrides();
-          log('info', 'Env override deleted', { key: data.key, userRole, action: 'env.delete' });
+          log('info', 'Env override deleted', { key: data.key, scope: delScopeKey, userRole, action: 'env.delete' });
           safeSend(ws, { type: 'env_delete', status: 'ok', key: data.key });
           break;
         }
@@ -737,7 +785,7 @@ wss.on('connection', (ws, req) => {
             safeSend(ws, { type: 'error', message: 'Permission denied: env management requires superadmin' });
             break;
           }
-          safeSend(ws, { type: 'env_list', vars: { ...envOverrides } });
+          safeSend(ws, { type: 'env_list', vars: getEnvForScope(openclawId) });
           break;
         }
 
@@ -756,8 +804,9 @@ wss.on('connection', (ws, req) => {
           const skipped = [];
           const errors = [];
 
-          // Collect mappable vars
-          for (const [envKey, envVal] of Object.entries(envOverrides)) {
+          // Collect mappable vars from the scoped env for this claw
+          const syncEnv = getEnvForScope(openclawId);
+          for (const [envKey, envVal] of Object.entries(syncEnv)) {
             const configPath = ENV_TO_CONFIG_MAP[envKey];
             if (configPath) {
               synced.push({ key: envKey, configPath, value: envVal });
@@ -824,9 +873,10 @@ wss.on('connection', (ws, req) => {
               child.on('close', (code) => {
                 if (code === 0) {
                   // Clear cached pod since it will be replaced
-                  if (EXEC_MODE === 'kubectl' && userId) {
+                  if (EXEC_MODE === 'kubectl') {
                     resolvedPod = null;
-                    _podCache.delete(userId);
+                    if (userId) _podCache.delete(userId);
+                    if (openclawId) _podCache.delete(`oc:${openclawId}`);
                   }
                   resolve();
                 }
@@ -894,7 +944,8 @@ wss.on('connection', (ws, req) => {
           safeSend(ws, { type: 'error', message: 'Unknown message type' });
       }
     } catch (err) {
-      safeSend(ws, { type: 'error', message: 'Invalid JSON message' });
+      log('error', 'Message handling error', { error: err.message, stack: err.stack?.split('\n')[0] });
+      safeSend(ws, { type: 'error', message: `Message error: ${err.message}` });
     }
   });
 

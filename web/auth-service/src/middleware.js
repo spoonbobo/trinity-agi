@@ -45,8 +45,8 @@ function verifyToken(req, res, next) {
       raw: decoded,
       isGuest: false,
     };
-    // Audit login success for session-creation endpoints (/auth/me, /auth/session)
-    const sessionPaths = ['/auth/me', '/auth/session'];
+    // Audit login success for session-creation endpoints
+    const sessionPaths = ['/auth/me'];
     if (sessionPaths.some(p => req.path === p || req.originalUrl?.startsWith(p))) {
       writeAuditLogSafe({
         userId,

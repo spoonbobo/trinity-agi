@@ -4,6 +4,7 @@ import '../../core/theme.dart';
 import '../../core/providers.dart' show terminalClientProvider;
 import '../../core/terminal_client.dart' show EnvSyncResult;
 import '../../core/toast_provider.dart';
+import '../../main.dart' show authClientProvider;
 
 /// Environment variables management tab: allows superadmins to dynamically
 /// set, edit, and delete env vars that are injected into docker exec commands.
@@ -197,11 +198,21 @@ class _AdminEnvTabState extends ConsumerState<AdminEnvTab> {
           decoration: BoxDecoration(
             border: Border(bottom: BorderSide(color: t.border, width: 0.5)),
           ),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
             children: [
               Text(
-                'environment variables (${_vars.length})',
+                'env (${_vars.length})',
                 style: theme.textTheme.bodyMedium?.copyWith(color: t.fgPrimary),
+              ),
+              const SizedBox(width: 8),
+              // Claw indicator badge
+              Text(
+                ref.watch(authClientProvider).state.activeOpenClaw?.name ?? '',
+                style: theme.textTheme.labelSmall?.copyWith(color: t.accentSecondary, fontSize: 9),
               ),
               const SizedBox(width: 12),
               if (_loading)
@@ -242,6 +253,16 @@ class _AdminEnvTabState extends ConsumerState<AdminEnvTab> {
                   style: theme.textTheme.labelSmall?.copyWith(
                     color: _loading ? t.fgDisabled : t.accentPrimary,
                   ),
+                ),
+              ),
+            ],
+          ),
+              // Warning: changes only affect this claw
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  'changes only affect this claw',
+                  style: theme.textTheme.labelSmall?.copyWith(color: t.fgDisabled, fontSize: 8),
                 ),
               ),
             ],

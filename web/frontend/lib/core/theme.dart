@@ -90,9 +90,13 @@ String fontFamilyName(AppFontFamily family) {
   }
 }
 
+/// Fallback fonts for CJK characters, symbols, and other missing glyphs.
+/// These are bundled in pubspec.yaml and downloaded in the Dockerfile.
+const _fontFallback = ['NotoSans', 'NotoSansSC', 'NotoSansTC'];
+
 TextTheme applyAppFontToTextTheme(AppFontFamily family, TextTheme base) {
   final fontName = fontFamilyName(family);
-  return base.apply(fontFamily: fontName);
+  return base.apply(fontFamily: fontName, fontFamilyFallback: _fontFallback);
 }
 
 TextStyle appFontStyle(
@@ -103,6 +107,7 @@ TextStyle appFontStyle(
 }) {
   return (textStyle ?? const TextStyle()).copyWith(
     fontFamily: fontFamilyName(family),
+    fontFamilyFallback: _fontFallback,
     color: color ?? textStyle?.color,
     fontSize: fontSize ?? textStyle?.fontSize,
   );

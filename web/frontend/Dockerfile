@@ -34,7 +34,23 @@ RUN mkdir -p fonts && \
     rm -rf /tmp/geist* && \
     # --- Monofur (monospace, playful rounded) ---
     curl -sL "https://github.com/chrissimpkins/codeface/raw/master/fonts/monofur/monof55.ttf" -o fonts/monofur-Regular.ttf && \
-    curl -sL "https://github.com/chrissimpkins/codeface/raw/master/fonts/monofur/monof56.ttf" -o fonts/monofur-Bold.ttf
+    curl -sL "https://github.com/chrissimpkins/codeface/raw/master/fonts/monofur/monof56.ttf" -o fonts/monofur-Bold.ttf && \
+    # --- Noto Sans SC (CJK Simplified Chinese fallback) ---
+    curl -sL "https://github.com/notofonts/noto-cjk/releases/download/Sans2.004/08_NotoSansCJKsc.zip" -o /tmp/notosc.zip && \
+    unzip -q /tmp/notosc.zip -d /tmp/notosc && \
+    cp /tmp/notosc/NotoSansCJKsc-Regular.otf fonts/NotoSansSC-Regular.otf && \
+    rm -rf /tmp/notosc* && \
+    # --- Noto Sans TC (CJK Traditional Chinese fallback) ---
+    (curl -sL --retry 3 --connect-timeout 30 "https://github.com/notofonts/noto-cjk/releases/download/Sans2.004/07_NotoSansCJKtc.zip" -o /tmp/nototc.zip && \
+    unzip -q /tmp/nototc.zip -d /tmp/nototc && \
+    cp /tmp/nototc/NotoSansCJKtc-Regular.otf fonts/NotoSansTC-Regular.otf || \
+    touch fonts/NotoSansTC-Regular.otf) && \
+    rm -rf /tmp/nototc* && \
+    # --- Noto Sans (Latin/Cyrillic/Greek/symbols fallback) ---
+    curl -sL "https://github.com/notofonts/latin-greek-cyrillic/releases/download/NotoSans-v2.014/NotoSans-v2.014.zip" -o /tmp/notosans.zip && \
+    unzip -q /tmp/notosans.zip -d /tmp/notosans && \
+    cp /tmp/notosans/NotoSans/unhinted/ttf/NotoSans-Regular.ttf fonts/NotoSans-Regular.ttf && \
+    rm -rf /tmp/notosans*
 
 COPY pubspec.yaml pubspec.lock* ./
 RUN flutter pub get
