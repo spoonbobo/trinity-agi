@@ -19,7 +19,7 @@
   "links": [],
   "panels": [
     {
-      "datasource": "Loki",
+      "datasource": "PostgreSQL",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -79,16 +79,16 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "sum(rate({cluster=\"trinity-agi\"} |= \"login\" [5m])) by (level)",
-          "legendFormat": "{{level}}",
+          "rawSql": "SELECT\n  date_trunc('minute', created_at) AS time,\n  action,\n  count(*) AS value\nFROM rbac.audit_log\nWHERE action IN ('auth.login.success', 'auth.login.failed', 'auth.token.expired')\n  AND created_at >= $__timeFrom()\n  AND created_at <= $__timeTo()\nGROUP BY 1, 2\nORDER BY 1",
+          "format": "time_series",
           "refId": "A"
         }
       ],
-      "title": "Login Rate (5m)",
+      "title": "Login Events",
       "type": "timeseries"
     },
     {
-      "datasource": "Loki",
+      "datasource": "PostgreSQL",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -103,8 +103,12 @@
                 "value": null
               },
               {
+                "color": "yellow",
+                "value": 3
+              },
+              {
                 "color": "red",
-                "value": 5
+                "value": 10
               }
             ]
           }
@@ -132,7 +136,8 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "sum(rate({cluster=\"trinity-agi\"} |= \"login\" |= \"failed\" [5m]))",
+          "rawSql": "SELECT\n  date_trunc('minute', created_at) AS time,\n  count(*) AS value\nFROM rbac.audit_log\nWHERE action = 'auth.login.failed'\n  AND created_at >= now() - INTERVAL '5 minutes'\nGROUP BY 1\nORDER BY 1",
+          "format": "time_series",
           "refId": "A"
         }
       ],
@@ -140,7 +145,7 @@
       "type": "gauge"
     },
     {
-      "datasource": "Loki",
+      "datasource": "PostgreSQL",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -180,7 +185,8 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "sum(rate({cluster=\"trinity-agi\"} |= \"role\" |= \"assigned\" [5m]))",
+          "rawSql": "SELECT\n  date_trunc('minute', created_at) AS time,\n  count(*) AS value\nFROM rbac.audit_log\nWHERE action IN ('role.assigned', 'users.role.assign')\n  AND created_at >= now() - INTERVAL '5 minutes'\nGROUP BY 1\nORDER BY 1",
+          "format": "time_series",
           "refId": "A"
         }
       ],
@@ -188,7 +194,105 @@
       "type": "gauge"
     },
     {
-      "datasource": "Loki",
+      "datasource": "PostgreSQL",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 4
+      },
+      "id": 7,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "pluginVersion": "8.0.0",
+      "targets": [
+        {
+          "rawSql": "SELECT\n  date_trunc('minute', created_at) AS time,\n  count(*) AS value\nFROM rbac.audit_log\nWHERE action = 'auth.guest.issued'\n  AND created_at >= now() - INTERVAL '1 hour'\nGROUP BY 1\nORDER BY 1",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "title": "Guest Tokens Issued (1h)",
+      "type": "gauge"
+    },
+    {
+      "datasource": "PostgreSQL",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 4
+      },
+      "id": 8,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "pluginVersion": "8.0.0",
+      "targets": [
+        {
+          "rawSql": "SELECT count(*) AS value,\n  now() AS time\nFROM rbac.audit_log\nWHERE created_at >= now() - INTERVAL '24 hours'",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "title": "Total Audit Events (24h)",
+      "type": "stat"
+    },
+    {
+      "datasource": "PostgreSQL",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -248,16 +352,16 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "sum(rate({cluster=\"trinity-agi\"} |= \"permission denied\" [5m])) by (action)",
-          "legendFormat": "{{action}}",
+          "rawSql": "SELECT\n  date_trunc('minute', created_at) AS time,\n  resource AS metric,\n  count(*) AS value\nFROM rbac.audit_log\nWHERE action = 'permission.denied'\n  AND created_at >= $__timeFrom()\n  AND created_at <= $__timeTo()\nGROUP BY 1, 2\nORDER BY 1",
+          "format": "time_series",
           "refId": "A"
         }
       ],
-      "title": "Permission Denied Rate (5m)",
+      "title": "Permission Denied by Action",
       "type": "timeseries"
     },
     {
-      "datasource": "Loki",
+      "datasource": "PostgreSQL",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -267,8 +371,8 @@
             "axisLabel": "",
             "axisPlacement": "auto",
             "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
+            "drawStyle": "bars",
+            "fillOpacity": 80,
             "gradientMode": "none",
             "hideFrom": {
               "tooltip": false,
@@ -317,16 +421,16 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "sum(rate({cluster=\"trinity-agi\"} |= \"command\" [5m])) by (tier)",
-          "legendFormat": "{{tier}}",
+          "rawSql": "SELECT\n  date_trunc('hour', created_at) AS time,\n  action,\n  count(*) AS value\nFROM rbac.audit_log\nWHERE action LIKE 'openclaw.%'\n  AND created_at >= $__timeFrom()\n  AND created_at <= $__timeTo()\nGROUP BY 1, 2\nORDER BY 1",
+          "format": "time_series",
           "refId": "A"
         }
       ],
-      "title": "Terminal Commands by Tier (5m)",
+      "title": "OpenClaw Operations",
       "type": "timeseries"
     },
     {
-      "datasource": "Loki",
+      "datasource": "PostgreSQL",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -357,23 +461,131 @@
       },
       "id": 6,
       "options": {
-        "showHeader": true
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "created_at"
+          }
+        ]
       },
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "{cluster=\"trinity-agi\"} |= \"RBAC\" | json | level=\"error\"",
-          "limit": 50,
+          "rawSql": "SELECT\n  created_at,\n  user_id,\n  action,\n  resource,\n  metadata::TEXT,\n  ip\nFROM rbac.audit_log\nWHERE action IN ('permission.denied', 'auth.login.failed', 'auth.token.expired', 'system.error')\n  AND created_at >= $__timeFrom()\n  AND created_at <= $__timeTo()\nORDER BY created_at DESC\nLIMIT 100",
+          "format": "table",
           "refId": "A"
         }
       ],
-      "title": "Recent RBAC Errors",
+      "title": "Recent Security Events",
+      "type": "table"
+    },
+    {
+      "datasource": "PostgreSQL",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 25
+      },
+      "id": 9,
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "count"
+          }
+        ]
+      },
+      "pluginVersion": "8.0.0",
+      "targets": [
+        {
+          "rawSql": "SELECT\n  ip,\n  count(*) AS count\nFROM rbac.audit_log\nWHERE action = 'auth.login.failed'\n  AND created_at >= now() - INTERVAL '1 hour'\nGROUP BY ip\nHAVING count(*) >= 3\nORDER BY count DESC\nLIMIT 20",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "title": "Suspicious IPs (>= 3 failed logins/hour)",
+      "type": "table"
+    },
+    {
+      "datasource": "PostgreSQL",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 25
+      },
+      "id": 10,
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "partition_name"
+          }
+        ]
+      },
+      "pluginVersion": "8.0.0",
+      "targets": [
+        {
+          "rawSql": "SELECT\n  partition_name,\n  row_count,\n  date_range_from,\n  date_range_to,\n  dropped_at,\n  retention_days\nFROM rbac.audit_archive_manifest\nORDER BY dropped_at DESC\nLIMIT 20",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "title": "Audit Partition Archive History",
       "type": "table"
     }
   ],
   "schemaVersion": 27,
   "style": "dark",
-  "tags": ["rbac", "security", "trinity-agi"],
+  "tags": ["rbac", "security", "trinity-agi", "audit"],
   "templating": {
     "list": []
   },
@@ -385,5 +597,5 @@
   "timezone": "",
   "title": "Trinity AGI - RBAC Security",
   "uid": "trinity-rbac",
-  "version": 1
+  "version": 2
 }

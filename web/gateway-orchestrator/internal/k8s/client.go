@@ -294,6 +294,52 @@ func (c *Client) CreateOpenClawDeployment(ctx context.Context, oc *db.OpenClaw, 
 	return nil
 }
 
+// ── Update Resources ────────────────────────────────────────────────────
+
+// UpdateOpenClawConfigMap patches the openclaw.json in an existing ConfigMap.
+func (c *Client) UpdateOpenClawConfigMap(ctx context.Context, resName, configJSON string) error {
+	cm, err := c.clientset.CoreV1().ConfigMaps(c.namespace).Get(ctx, resName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get configmap %s: %w", resName, err)
+	}
+	cm.Data["openclaw.json"] = configJSON
+	_, err = c.clientset.CoreV1().ConfigMaps(c.namespace).Update(ctx, cm, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("update configmap %s: %w", resName, err)
+	}
+	return nil
+}
+
+// GetOpenClawConfig reads the openclaw.json from a ConfigMap.
+func (c *Client) GetOpenClawConfig(ctx context.Context, resName string) (string, error) {
+	cm, err := c.clientset.CoreV1().ConfigMaps(c.namespace).Get(ctx, resName, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("get configmap %s: %w", resName, err)
+	}
+	config, ok := cm.Data["openclaw.json"]
+	if !ok {
+		return "", fmt.Errorf("configmap %s missing openclaw.json key", resName)
+	}
+	return config, nil
+}
+
+// RestartOpenClawDeployment triggers a rolling restart by annotating the pod template.
+func (c *Client) RestartOpenClawDeployment(ctx context.Context, resName string) error {
+	deploy, err := c.clientset.AppsV1().Deployments(c.namespace).Get(ctx, resName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get deployment %s: %w", resName, err)
+	}
+	if deploy.Spec.Template.Annotations == nil {
+		deploy.Spec.Template.Annotations = make(map[string]string)
+	}
+	deploy.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"] = metav1.Now().Format("2006-01-02T15:04:05Z")
+	_, err = c.clientset.AppsV1().Deployments(c.namespace).Update(ctx, deploy, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("restart deployment %s: %w", resName, err)
+	}
+	return nil
+}
+
 // ── Delete Resources ────────────────────────────────────────────────────
 
 // DeleteOpenClawResources removes all Kubernetes resources for an OpenClaw instance.

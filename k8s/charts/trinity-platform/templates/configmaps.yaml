@@ -399,3 +399,17 @@ data:
       2>&1 || echo "[vault-init] WARN: failed to write superadmin config"
 
     echo "[vault-init] Secrets configured at $VAULT_ADDR"
+---
+# ─── Keycloak IdP bootstrap scripts ───────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-bootstrap-scripts
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.labels" . | nindent 4 }}
+data:
+  configure-authentik-idp.sh: |
+    {{- .Files.Get "files/configure-authentik-idp.sh" | nindent 4 }}
+  configure-adfs-idp.sh: |
+    {{- .Files.Get "files/configure-adfs-idp.sh" | nindent 4 }}

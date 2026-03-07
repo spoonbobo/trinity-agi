@@ -5,6 +5,7 @@ const rateLimit = require('express-rate-limit');
 const { ensureRole } = require('./rbac');
 const { pool } = require('./db');
 const { verifyToken, resolveRole } = require('./middleware');
+const { auditContext } = require('./audit');
 const authRoutes = require('./routes/auth');
 const usersRoutes = require('./routes/users');
 
@@ -73,6 +74,9 @@ app.get('/auth/health', (req, res) => {
 
 // Rate limit guest endpoint specifically
 app.post('/auth/guest', guestLimiter);
+
+// Audit context middleware: captures IP, User-Agent, path, method on every request
+app.use(auditContext());
 
 // Auth middleware for all /auth/* routes (except health and guest)
 app.use('/auth', verifyToken, resolveRole);

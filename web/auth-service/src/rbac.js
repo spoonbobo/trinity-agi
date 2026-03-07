@@ -1,4 +1,5 @@
 const { pool } = require('./db');
+const { writeAuditLogSafe, ACTIONS } = require('./audit');
 
 function log(level, message, meta = {}) {
   const entry = {
@@ -65,8 +66,12 @@ async function assignRole(userId, roleName, grantedBy) {
     log('info', 'RBAC: role assigned', { userId, role: roleName, grantedBy, action: 'role.assigned' });
 
     // Audit log is best-effort -- don't let failures crash the flow
-    writeAuditLog(grantedBy || userId, 'role.assigned', `user:${userId}`, { role: roleName }, null)
-      .catch((err) => log('error', 'Audit log write failed', { error: err.message }));
+    writeAuditLogSafe({
+      userId: grantedBy || userId,
+      action: ACTIONS.ROLE_ASSIGNED,
+      resource: `user:${userId}`,
+      metadata: { role: roleName },
+    });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     throw err;
@@ -97,23 +102,28 @@ async function listUsers() {
   return result.rows;
 }
 
+// ── Audit functions are now in audit.js ─────────────────────────────────
+// Re-exported here for backward compatibility with existing callers.
+const {
+  writeAuditLog: _writeAuditLog,
+  getAuditLog: _getAuditLog,
+} = require('./audit');
+
+/**
+ * @deprecated Use `require('./audit').writeAuditLog()` with named params instead.
+ * Legacy signature preserved for callers that haven't migrated yet.
+ */
 async function writeAuditLog(userId, action, resource, metadata, ip) {
-  await pool.query(
-    'INSERT INTO rbac.audit_log (user_id, action, resource, metadata, ip) VALUES ($1, $2, $3, $4, $5)',
-    [userId, action, resource, metadata ? JSON.stringify(metadata) : '{}', ip]
-  );
+  return _writeAuditLog({ userId, action, resource, metadata, ip });
 }
 
+/**
+ * @deprecated Use `require('./audit').getAuditLog()` with named params instead.
+ * Legacy signature preserved for callers that haven't migrated yet.
+ */
 async function getAuditLog(limit = 100, offset = 0) {
-  // Clamp limit/offset to prevent DoS via huge result sets
-  const safeLimit = Math.max(1, Math.min(parseInt(limit, 10) || 100, 1000));
-  const safeOffset = Math.max(0, parseInt(offset, 10) || 0);
-
-  const result = await pool.query(
-    'SELECT * FROM rbac.audit_log ORDER BY created_at DESC LIMIT $1 OFFSET $2',
-    [safeLimit, safeOffset]
-  );
-  return result.rows;
+  const result = await _getAuditLog({ limit, offset });
+  return result.logs;
 }
 
 async function findRoleIdByName(roleName) {
@@ -138,8 +148,12 @@ async function ensureRole(userId, roleName, grantedBy = null) {
 
   if (result.rows.length > 0) {
     log('info', 'RBAC: role ensured', { userId, role: roleName, grantedBy, action: 'role.ensured' });
-    writeAuditLog(grantedBy || userId, 'role.ensured', `user:${userId}`, { role: roleName }, null)
-      .catch((err) => log('error', 'Audit log write failed', { error: err.message }));
+    writeAuditLogSafe({
+      userId: grantedBy || userId,
+      action: ACTIONS.ROLE_ENSURED,
+      resource: `user:${userId}`,
+      metadata: { role: roleName },
+    });
   }
 }
 

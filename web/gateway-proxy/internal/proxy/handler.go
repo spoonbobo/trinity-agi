@@ -83,11 +83,27 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Route to appropriate handler
 	isWebSocket := isWebSocketUpgrade(r)
+
+	// Browser control API: /__openclaw__/browser/* routes to the socat
+	// bridge on port 18793 (which forwards to loopback:18791).
+	// Strip the /__openclaw__/browser prefix before proxying.
+	if isBrowserControlPath(r.URL.Path) {
+		HandleBrowserHTTP(w, r, backend)
+		return
+	}
+
 	if isWebSocket {
 		HandleWebSocket(w, r, backend)
 	} else {
 		HandleHTTP(w, r, backend)
 	}
+}
+
+const browserControlPrefix = "/__openclaw__/browser"
+
+// isBrowserControlPath checks whether the request targets the browser control API.
+func isBrowserControlPath(path string) bool {
+	return path == browserControlPrefix || strings.HasPrefix(path, browserControlPrefix+"/")
 }
 
 // isWebSocketUpgrade checks whether the request is a WebSocket upgrade request.

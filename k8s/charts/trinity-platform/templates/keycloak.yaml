@@ -74,6 +74,31 @@ spec:
             - name: AUTHENTIK_DEFAULT_GROUP_VALUE
               value: {{ .Values.keycloak.authentik.defaultGroupValue | quote }}
             {{- end }}
+            # ADFS / SAML IdP federation
+            - name: ADFS_ENABLED
+              value: {{ .Values.keycloak.adfs.enabled | quote }}
+            {{- if .Values.keycloak.adfs.enabled }}
+            - name: ADFS_METADATA_URL
+              value: {{ .Values.keycloak.adfs.metadataUrl | quote }}
+            - name: ADFS_SSO_URL
+              value: {{ .Values.keycloak.adfs.ssoUrl | quote }}
+            - name: ADFS_SLO_URL
+              value: {{ .Values.keycloak.adfs.sloUrl | quote }}
+            - name: ADFS_SIGNING_CERT
+              value: {{ .Values.keycloak.adfs.signingCert | quote }}
+            - name: ADFS_NAMEID_FORMAT
+              value: {{ .Values.keycloak.adfs.nameIdFormat | quote }}
+            - name: ADFS_DISPLAY_NAME
+              value: {{ .Values.keycloak.adfs.displayName | quote }}
+            - name: ADFS_TRUST_EMAIL
+              value: {{ .Values.keycloak.adfs.trustEmail | quote }}
+            - name: ADFS_ROLE_MAPPER_ENABLED
+              value: {{ .Values.keycloak.adfs.roleMapperEnabled | quote }}
+            - name: ADFS_ROLE_ATTRIBUTE
+              value: {{ .Values.keycloak.adfs.roleAttribute | quote }}
+            - name: ADFS_DEFAULT_ROLE
+              value: {{ .Values.keycloak.adfs.defaultRole | quote }}
+            {{- end }}
           volumeMounts:
             - name: realm-import
               mountPath: /opt/keycloak/data/import
@@ -168,6 +193,80 @@ spec:
               value: {{ .Values.keycloak.authentik.groupsMapperEnabled | quote }}
             - name: AUTHENTIK_DEFAULT_GROUP_VALUE
               value: {{ .Values.keycloak.authentik.defaultGroupValue | quote }}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+          resources:
+            limits:
+              memory: 256Mi
+      volumes:
+        - name: scripts
+          configMap:
+            name: keycloak-bootstrap-scripts
+{{- end }}
+---
+# ─── Keycloak ADFS/SAML Bootstrap Job ─────────────────────────────────────
+{{- if .Values.keycloak.adfs.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: keycloak-adfs-bootstrap-{{ .Release.Revision }}
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "keycloak-adfs-bootstrap" "Release" .Release "Chart" .Chart) | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "6"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "trinity.componentLabels" (dict "component" "keycloak-adfs-bootstrap" "Release" .Release "Chart" .Chart) | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: bootstrap
+          image: {{ include "trinity.image" (dict "image" .Values.keycloak.image "global" .Values.global) }}
+          command: ["/bin/sh", "/scripts/configure-adfs-idp.sh"]
+          env:
+            - name: KEYCLOAK_SERVER_URL
+              value: "http://keycloak:8080/keycloak"
+            - name: KEYCLOAK_REALM
+              value: "trinity"
+            - name: KEYCLOAK_ADMIN_REALM
+              value: "master"
+            - name: KEYCLOAK_ADMIN
+              value: {{ .Values.keycloak.admin | quote }}
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: KEYCLOAK_ADMIN_PASSWORD
+            - name: ADFS_ENABLED
+              value: {{ .Values.keycloak.adfs.enabled | quote }}
+            - name: ADFS_METADATA_URL
+              value: {{ .Values.keycloak.adfs.metadataUrl | quote }}
+            - name: ADFS_SSO_URL
+              value: {{ .Values.keycloak.adfs.ssoUrl | quote }}
+            - name: ADFS_SLO_URL
+              value: {{ .Values.keycloak.adfs.sloUrl | quote }}
+            - name: ADFS_SIGNING_CERT
+              value: {{ .Values.keycloak.adfs.signingCert | quote }}
+            - name: ADFS_NAMEID_FORMAT
+              value: {{ .Values.keycloak.adfs.nameIdFormat | quote }}
+            - name: ADFS_DISPLAY_NAME
+              value: {{ .Values.keycloak.adfs.displayName | quote }}
+            - name: ADFS_TRUST_EMAIL
+              value: {{ .Values.keycloak.adfs.trustEmail | quote }}
+            - name: ADFS_ROLE_MAPPER_ENABLED
+              value: {{ .Values.keycloak.adfs.roleMapperEnabled | quote }}
+            - name: ADFS_ROLE_ATTRIBUTE
+              value: {{ .Values.keycloak.adfs.roleAttribute | quote }}
+            - name: ADFS_DEFAULT_ROLE
+              value: {{ .Values.keycloak.adfs.defaultRole | quote }}
           volumeMounts:
             - name: scripts
               mountPath: /scripts

@@ -91,6 +91,25 @@ keycloak:
     scopes: "openid profile email groups"
     groupsMapperEnabled: true
     defaultGroupValue: "trinity_user"
+  # ADFS / SAML IdP federation (optional)
+  adfs:
+    enabled: false
+    # ADFS Federation Metadata URL, e.g. https://adfs.corp.com/FederationMetadata/2007-06/FederationMetadata.xml
+    metadataUrl: ""
+    # Or supply endpoints manually (overrides metadataUrl if both set)
+    ssoUrl: ""           # e.g. https://adfs.corp.com/adfs/ls/
+    sloUrl: ""           # e.g. https://adfs.corp.com/adfs/ls/ (single logout)
+    signingCert: ""      # Base64 ADFS token-signing certificate (PEM, no headers)
+    # SAML NameID format
+    nameIdFormat: "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"
+    # Display name on the Keycloak login page
+    displayName: "ADFS Login"
+    # Trust email from ADFS (skip Keycloak email verification)
+    trustEmail: true
+    # Attribute-to-role mapper
+    roleMapperEnabled: true
+    roleAttribute: "http://schemas.microsoft.com/ws/2008/06/identity/claims/role"
+    defaultRole: "trinity_user"
 
 # ─── Auth Service ──────────────────────────────────────────────────────────
 authService:

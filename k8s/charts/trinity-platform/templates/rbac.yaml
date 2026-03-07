@@ -31,7 +31,7 @@ rules:
   # Manage per-user ConfigMaps
   - apiGroups: [""]
     resources: ["configmaps"]
-    verbs: ["create", "delete", "get", "list", "watch", "patch"]
+    verbs: ["create", "delete", "get", "list", "watch", "patch", "update"]
   # Manage per-user Secrets (gateway tokens)
   - apiGroups: [""]
     resources: ["secrets"]

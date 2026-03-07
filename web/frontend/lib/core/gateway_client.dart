@@ -349,6 +349,7 @@ class GatewayClient extends ChangeNotifier {
   Map<String, String> get _browserHeaders => {
     'Authorization': 'Bearer ${auth.token}',
     'Content-Type': 'application/json',
+    if (openclawId != null) 'X-OpenClaw-Id': openclawId!,
   };
 
   Future<Map<String, dynamic>> browserApiGet(String path, {String profile = 'openclaw'}) async {

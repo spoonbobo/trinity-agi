@@ -32,6 +32,8 @@ spec:
           ports:
             - containerPort: {{ .Values.port }}
               name: gateway
+            - containerPort: 18793
+              name: browser-ctl
           env:
             - name: OPENCLAW_GATEWAY_TOKEN
               valueFrom:

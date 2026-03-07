@@ -1,7 +1,7 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
-const { writeAuditLog, getEffectivePermissions } = require('../rbac');
+const { writeAuditLogSafe, auditOptsFromReq, ACTIONS } = require('../audit');
 
 const router = express.Router();
 
@@ -143,10 +143,12 @@ router.post('/openclaws/create', async (req, res) => {
 
     const data = await orchRes.json();
 
-    await writeAuditLog(
-      req.user.id, 'openclaw.create', 'openclaw',
-      { name, openclawId: data.id }, req.ip
-    ).catch(() => {});
+    writeAuditLogSafe({
+      ...auditOptsFromReq(req),
+      action: ACTIONS.OPENCLAW_CREATE,
+      resource: 'openclaw',
+      metadata: { name, openclawId: data.id },
+    });
 
     res.status(201).json(data);
   } catch (err) {
@@ -172,10 +174,12 @@ router.delete('/openclaws/:id', async (req, res) => {
       return res.status(orchRes.status).json({ error: errBody.error || 'Failed to delete OpenClaw' });
     }
 
-    await writeAuditLog(
-      req.user.id, 'openclaw.delete', 'openclaw',
-      { openclawId: req.params.id }, req.ip
-    ).catch(() => {});
+    writeAuditLogSafe({
+      ...auditOptsFromReq(req),
+      action: ACTIONS.OPENCLAW_DELETE,
+      resource: 'openclaw',
+      metadata: { openclawId: req.params.id },
+    });
 
     res.json(await orchRes.json());
   } catch (err) {
@@ -234,10 +238,12 @@ router.post('/openclaws/:id/assign', async (req, res) => {
       return res.status(orchRes.status).json({ error: errBody.error || 'Failed to assign user' });
     }
 
-    await writeAuditLog(
-      req.user.id, 'openclaw.assign', 'openclaw',
-      { openclawId: req.params.id, targetUserId: userId }, req.ip
-    ).catch(() => {});
+    writeAuditLogSafe({
+      ...auditOptsFromReq(req),
+      action: ACTIONS.OPENCLAW_ASSIGN,
+      resource: 'openclaw',
+      metadata: { openclawId: req.params.id, targetUserId: userId },
+    });
 
     res.json(await orchRes.json());
   } catch (err) {
@@ -266,10 +272,12 @@ router.delete('/openclaws/:id/assign/:userId', async (req, res) => {
       return res.status(orchRes.status).json({ error: errBody.error || 'Failed to unassign user' });
     }
 
-    await writeAuditLog(
-      req.user.id, 'openclaw.unassign', 'openclaw',
-      { openclawId: req.params.id, targetUserId: req.params.userId }, req.ip
-    ).catch(() => {});
+    writeAuditLogSafe({
+      ...auditOptsFromReq(req),
+      action: ACTIONS.OPENCLAW_UNASSIGN,
+      resource: 'openclaw',
+      metadata: { openclawId: req.params.id, targetUserId: req.params.userId },
+    });
 
     res.json(await orchRes.json());
   } catch (err) {
@@ -300,6 +308,72 @@ router.get('/openclaws/:id/assignments', async (req, res) => {
   }
 });
 
+// GET /auth/openclaws/:id/config - read OpenClaw config (admin+)
+router.get('/openclaws/:id/config', async (req, res) => {
+  try {
+    if (!['admin', 'superadmin'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+
+    const orchRes = await fetch(`${ORCHESTRATOR_URL}/openclaws/${req.params.id}/config`, {
+      headers: { Authorization: `Bearer ${ORCHESTRATOR_SERVICE_TOKEN}` },
+    });
+
+    if (!orchRes.ok) {
+      const body = await orchRes.text();
+      return res.status(orchRes.status).json({ error: body || 'Failed to read config' });
+    }
+
+    const config = await orchRes.json();
+    res.json(config);
+  } catch (err) {
+    console.error('[auth] Get config error:', err);
+    res.status(500).json({ error: 'Failed to read config' });
+  }
+});
+
+// PATCH /auth/openclaws/:id/config - update OpenClaw config (admin+)
+router.patch('/openclaws/:id/config', async (req, res) => {
+  try {
+    if (!['admin', 'superadmin'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+
+    const { config, restart } = req.body;
+    if (!config || typeof config !== 'object') {
+      return res.status(400).json({ error: 'config object is required' });
+    }
+
+    const orchRes = await fetch(`${ORCHESTRATOR_URL}/openclaws/${req.params.id}/config`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${ORCHESTRATOR_SERVICE_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ config, restart: restart === true }),
+    });
+
+    if (!orchRes.ok) {
+      const body = await orchRes.text();
+      return res.status(orchRes.status).json({ error: body || 'Failed to update config' });
+    }
+
+    const result = await orchRes.json();
+
+    writeAuditLogSafe(req.pool, {
+      ...auditOptsFromReq(req),
+      action: 'OPENCLAW_CONFIG_UPDATE',
+      resource: `openclaw:${req.params.id}`,
+      metadata: { restart: restart === true },
+    });
+
+    res.json(result);
+  } catch (err) {
+    console.error('[auth] Patch config error:', err);
+    res.status(500).json({ error: 'Failed to update config' });
+  }
+});
+
 // ── Legacy endpoints (kept for compatibility) ───────────────────────────
 
 // POST /auth/guest - issue guest JWT
@@ -315,6 +389,18 @@ router.post('/guest', (req, res) => {
     JWT_SECRET,
     { expiresIn: GUEST_JWT_TTL }
   );
+
+  // Audit: guest token issuance
+  writeAuditLogSafe({
+    userId: null,
+    action: ACTIONS.AUTH_GUEST_ISSUED,
+    resource: `user:${guestId}`,
+    metadata: { guestId, ttl: GUEST_JWT_TTL },
+    ip: req.ip,
+    userAgent: req.get('user-agent') || null,
+    requestPath: req.originalUrl ? req.originalUrl.split('?')[0] : req.path,
+    httpMethod: req.method,
+  });
 
   res.json({
     token,

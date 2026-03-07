@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
-const { ensureUserRole, getEffectivePermissions, getUserRoleName, writeAuditLog } = require('./rbac');
+const { ensureUserRole, getEffectivePermissions, getUserRoleName } = require('./rbac');
+const { writeAuditLogSafe, auditOptsFromReq, ACTIONS } = require('./audit');
 const { getPermissionsByTier } = require('./rbac-registry');
 
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -44,11 +45,39 @@ function verifyToken(req, res, next) {
       raw: decoded,
       isGuest: false,
     };
-    // Only log on session-creation endpoints, not every authenticated request
-    // (login.success logging moved to /auth/session and /auth/me first-call)
+    // Audit login success for session-creation endpoints (/auth/me, /auth/session)
+    const sessionPaths = ['/auth/me', '/auth/session'];
+    if (sessionPaths.some(p => req.path === p || req.originalUrl?.startsWith(p))) {
+      writeAuditLogSafe({
+        userId,
+        action: ACTIONS.AUTH_LOGIN_SUCCESS,
+        resource: `user:${userId}`,
+        metadata: { email: decoded.email || null },
+        ip: req.ip,
+        userAgent: req.get('user-agent') || null,
+        requestPath: req.originalUrl ? req.originalUrl.split('?')[0] : req.path,
+        httpMethod: req.method,
+      });
+    }
     next();
   } catch (err) {
     log('warn', 'login: failed', { error: err.message, action: 'login.failed' });
+
+    // Audit: log failed login attempt
+    const auditAction = err.name === 'TokenExpiredError'
+      ? ACTIONS.AUTH_TOKEN_EXPIRED
+      : ACTIONS.AUTH_LOGIN_FAILED;
+    writeAuditLogSafe({
+      userId: null,
+      action: auditAction,
+      resource: null,
+      metadata: { error: err.message, errorType: err.name },
+      ip: req.ip,
+      userAgent: req.get('user-agent') || null,
+      requestPath: req.originalUrl ? req.originalUrl.split('?')[0] : req.path,
+      httpMethod: req.method,
+    });
+
     if (err.name === 'TokenExpiredError') {
       return res.status(401).json({ error: 'Token expired' });
     }
@@ -88,9 +117,13 @@ function requirePermission(action) {
         ip: req.ip,
         action: 'permission.denied'
       });
-      // Best-effort audit log -- don't crash if it fails
-      writeAuditLog(req.user.id, 'permission.denied', action, { role: req.user.role }, req.ip)
-        .catch((err) => console.error('[auth] Audit log write failed:', err.message));
+      // Best-effort audit log with full request context
+      writeAuditLogSafe({
+        ...auditOptsFromReq(req),
+        action: ACTIONS.PERMISSION_DENIED,
+        resource: action,
+        metadata: { role: req.user.role },
+      });
       return res.status(403).json({
         error: 'Forbidden',
         required: action,

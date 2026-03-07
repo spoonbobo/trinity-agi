@@ -18,13 +18,14 @@ import '../canvas/canvas_mode_provider.dart';
 import '../governance/approval_panel.dart';
 import '../catalog/skills_cron_dialog.dart';
 import '../automations/automations_dialog.dart';
-import '../memory/memory_dialog.dart';
+
 import '../settings/settings_dialog.dart';
 import '../admin/admin_dialog.dart';
 import '../sessions/session_drawer.dart';
 import '../command_palette/command_palette.dart';
 import '../notifications/notification_center.dart';
 import '../../core/dialog_service.dart';
+import 'agent_workspace_dialog.dart';
 
 const _canvasSplitKey = 'trinity_canvas_split';
 const _defaultCanvasFlex = 7.0;
@@ -251,9 +252,9 @@ class _ShellPageState extends ConsumerState<ShellPage> {
       builder: (_) => const SkillsDialog());
   }
 
-  void _showMemoryDialog() {
-    _dialogs.showUnique(context: context, id: 'memory',
-      builder: (_) => const MemoryDialog());
+  void _showAgentWorkspaceDialog() {
+    _dialogs.showUnique(context: context, id: 'agent-workspace',
+      builder: (_) => const AgentWorkspaceDialog());
   }
 
   void _showAutomationsDialog() {
@@ -305,12 +306,13 @@ class _ShellPageState extends ConsumerState<ShellPage> {
         action: _toggleSessionDrawer,
         category: 'sessions',
       ),
-      CommandItem(
-        label: tr(language, 'memory'),
-        icon: Icons.psychology,
-        action: _showMemoryDialog,
-        category: 'navigation',
-      ),
+      if (authState.hasPermission('acp.manage'))
+        CommandItem(
+          label: 'agents',
+          icon: Icons.hub,
+          action: _showAgentWorkspaceDialog,
+          category: 'navigation',
+        ),
       CommandItem(
         label: tr(language, 'skills'),
         icon: Icons.extension,
@@ -716,11 +718,12 @@ class _ShellPageState extends ConsumerState<ShellPage> {
               },
             ),
           ],
-          if (!isMobile) ...[
-            _HoverLabel(text: tr(language, 'memory'), style: labelStyle!, onTap: _showMemoryDialog),
-          ],
           const Spacer(),
           if (!isMobile) ...[
+            if (authState.hasPermission('acp.manage')) ...[
+              _HoverLabel(text: 'agents', style: labelStyle!, onTap: _showAgentWorkspaceDialog),
+              const SizedBox(width: 14),
+            ],
             _HoverLabel(text: tr(language, 'skills'), style: labelStyle!, onTap: _showSkillsDialog),
             const SizedBox(width: 14),
             _HoverLabel(text: tr(language, 'automations'), style: labelStyle!, onTap: _showAutomationsDialog),
@@ -833,8 +836,9 @@ class _OpenClawSelector extends StatelessWidget {
   }
 
   void _showSwitcherDialog(BuildContext context) {
-    showDialog(
+    DialogService.instance.showUnique(
       context: context,
+      id: 'openclaw-switcher',
       barrierColor: Colors.black54,
       builder: (_) => _OpenClawSwitcherDialog(
         openclaws: openclaws,
@@ -849,7 +853,6 @@ class _OpenClawSelector extends StatelessWidget {
 }
 
 /// Dialog for switching between assigned OpenClaw instances.
-/// Matches the skills/automations dialog layout.
 class _OpenClawSwitcherDialog extends StatelessWidget {
   final List<OpenClawInfo> openclaws;
   final String? activeId;
@@ -878,7 +881,7 @@ class _OpenClawSwitcherDialog extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // ── Header (matches skills dialog) ─────────────────────────
+            // ── Header ─────────────────────────────────────────────────
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
@@ -911,7 +914,7 @@ class _OpenClawSwitcherDialog extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                  const SizedBox(width: 14), // dot space
+                  const SizedBox(width: 14),
                   Expanded(flex: 4, child: Text('name',
                     style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary, fontSize: 9))),
                   Expanded(flex: 3, child: Text('description',
@@ -940,7 +943,6 @@ class _OpenClawSwitcherDialog extends StatelessWidget {
                     ),
                     child: Row(
                       children: [
-                        // Status dot
                         Container(
                           width: 6, height: 6,
                           margin: const EdgeInsets.only(right: 8),
@@ -949,7 +951,6 @@ class _OpenClawSwitcherDialog extends StatelessWidget {
                             shape: BoxShape.circle,
                           ),
                         ),
-                        // Name
                         Expanded(
                           flex: 4,
                           child: Text(oc.name,
@@ -959,7 +960,6 @@ class _OpenClawSwitcherDialog extends StatelessWidget {
                             ),
                             overflow: TextOverflow.ellipsis),
                         ),
-                        // Description
                         Expanded(
                           flex: 3,
                           child: Text(
@@ -967,7 +967,6 @@ class _OpenClawSwitcherDialog extends StatelessWidget {
                             style: theme.textTheme.labelSmall?.copyWith(color: t.fgMuted, fontSize: 9),
                             overflow: TextOverflow.ellipsis),
                         ),
-                        // User count with person icon
                         SizedBox(
                           width: 60,
                           child: Row(
@@ -983,7 +982,6 @@ class _OpenClawSwitcherDialog extends StatelessWidget {
                             ],
                           ),
                         ),
-                        // Status
                         SizedBox(
                           width: 60,
                           child: Text(
@@ -1001,7 +999,6 @@ class _OpenClawSwitcherDialog extends StatelessWidget {
                 ),
               );
             }),
-            // ── Empty state ────────────────────────────────────────────
             if (openclaws.isEmpty)
               Padding(
                 padding: const EdgeInsets.all(24),

@@ -12,5 +12,8 @@ spec:
     - port: {{ .Values.port }}
       targetPort: gateway
       name: gateway
+    - port: 18793
+      targetPort: 18793
+      name: browser-ctl
   selector:
     {{- include "openclaw.selectorLabels" . | nindent 4 }}

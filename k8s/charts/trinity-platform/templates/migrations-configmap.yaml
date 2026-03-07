@@ -300,6 +300,252 @@ data:
         FOR EACH ROW
         EXECUTE FUNCTION rbac.update_openclaw_timestamp();
 
+  006_audit_partition.sql: |
+    -- Migration 006: Convert rbac.audit_log to a time-partitioned table
+    -- Enables efficient retention (DROP PARTITION) and query performance at scale (10M+ rows/month).
+    -- Also adds context columns for forensic completeness.
+
+    BEGIN;
+
+    ALTER TABLE rbac.audit_log RENAME TO audit_log_legacy;
+
+    DROP INDEX IF EXISTS rbac.idx_audit_log_user;
+    DROP INDEX IF EXISTS rbac.idx_audit_log_action;
+    DROP INDEX IF EXISTS rbac.idx_audit_log_created;
+
+    CREATE TABLE rbac.audit_log (
+      id            UUID NOT NULL DEFAULT gen_random_uuid(),
+      user_id       UUID,
+      action        TEXT NOT NULL,
+      resource      TEXT,
+      metadata      JSONB DEFAULT '{}',
+      ip            TEXT,
+      user_agent    TEXT,
+      request_path  TEXT,
+      http_method   TEXT,
+      session_id    TEXT,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (id, created_at)
+    ) PARTITION BY RANGE (created_at);
+
+    COMMENT ON TABLE rbac.audit_log IS 'Immutable audit trail, monthly-partitioned by created_at';
+
+    CREATE INDEX idx_audit_log_user       ON rbac.audit_log (user_id);
+    CREATE INDEX idx_audit_log_action     ON rbac.audit_log (action);
+    CREATE INDEX idx_audit_log_created    ON rbac.audit_log (created_at DESC);
+    CREATE INDEX idx_audit_log_resource   ON rbac.audit_log (resource);
+    CREATE INDEX idx_audit_log_session    ON rbac.audit_log (session_id) WHERE session_id IS NOT NULL;
+
+    CREATE OR REPLACE FUNCTION rbac.create_audit_partition(partition_date DATE)
+    RETURNS TEXT AS $$
+    DECLARE
+      start_date DATE := date_trunc('month', partition_date)::DATE;
+      end_date   DATE := (date_trunc('month', partition_date) + INTERVAL '1 month')::DATE;
+      part_name  TEXT := 'audit_log_' || to_char(start_date, 'YYYY_MM');
+      full_name  TEXT := 'rbac.' || part_name;
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'rbac' AND c.relname = part_name
+      ) THEN
+        RETURN full_name || ' (already exists)';
+      END IF;
+      EXECUTE format(
+        'CREATE TABLE %I.%I PARTITION OF rbac.audit_log FOR VALUES FROM (%L) TO (%L)',
+        'rbac', part_name, start_date, end_date
+      );
+      RETURN full_name || ' (created)';
+    END;
+    $$ LANGUAGE plpgsql;
+
+    CREATE OR REPLACE FUNCTION rbac.ensure_audit_partitions(months_ahead INTEGER DEFAULT 6)
+    RETURNS SETOF TEXT AS $$
+    DECLARE
+      m INTEGER;
+      target_date DATE;
+    BEGIN
+      FOR m IN 0..months_ahead LOOP
+        target_date := (date_trunc('month', now()) + (m || ' months')::INTERVAL)::DATE;
+        RETURN NEXT rbac.create_audit_partition(target_date);
+      END LOOP;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    CREATE OR REPLACE FUNCTION rbac.drop_old_audit_partitions(retention_days INTEGER DEFAULT 180)
+    RETURNS SETOF TEXT AS $$
+    DECLARE
+      cutoff DATE := (now() - (retention_days || ' days')::INTERVAL)::DATE;
+      rec RECORD;
+    BEGIN
+      FOR rec IN
+        SELECT c.relname AS part_name
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_inherits i ON i.inhrelid = c.oid
+        JOIN pg_class parent ON parent.oid = i.inhparent
+        WHERE n.nspname = 'rbac'
+          AND parent.relname = 'audit_log'
+          AND c.relkind = 'r'
+        ORDER BY c.relname
+      LOOP
+        DECLARE
+          part_year  INTEGER;
+          part_month INTEGER;
+          part_end   DATE;
+        BEGIN
+          part_year  := substring(rec.part_name FROM 'audit_log_(\d{4})_\d{2}')::INTEGER;
+          part_month := substring(rec.part_name FROM 'audit_log_\d{4}_(\d{2})')::INTEGER;
+          part_end   := make_date(part_year, part_month, 1) + INTERVAL '1 month';
+          IF part_end <= cutoff THEN
+            EXECUTE format('DROP TABLE rbac.%I', rec.part_name);
+            RETURN NEXT 'rbac.' || rec.part_name || ' (dropped)';
+          END IF;
+        EXCEPTION WHEN OTHERS THEN
+          CONTINUE;
+        END;
+      END LOOP;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    DO $$
+    DECLARE
+      m INTEGER;
+      target_date DATE;
+    BEGIN
+      FOR m IN REVERSE 3..1 LOOP
+        target_date := (date_trunc('month', now()) - (m || ' months')::INTERVAL)::DATE;
+        PERFORM rbac.create_audit_partition(target_date);
+      END LOOP;
+      FOR m IN 0..6 LOOP
+        target_date := (date_trunc('month', now()) + (m || ' months')::INTERVAL)::DATE;
+        PERFORM rbac.create_audit_partition(target_date);
+      END LOOP;
+    END;
+    $$;
+
+    INSERT INTO rbac.audit_log (id, user_id, action, resource, metadata, ip, created_at)
+    SELECT id, user_id, action, resource, metadata, ip, created_at
+    FROM rbac.audit_log_legacy;
+
+    DROP TABLE rbac.audit_log_legacy;
+
+    COMMIT;
+
+  007_audit_retention.sql: |
+    -- Migration 007: Audit log retention policy + automatic partition management
+
+    BEGIN;
+
+    CREATE TABLE IF NOT EXISTS rbac.audit_archive_manifest (
+      id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      partition_name  TEXT NOT NULL,
+      row_count       BIGINT NOT NULL DEFAULT 0,
+      date_range_from DATE NOT NULL,
+      date_range_to   DATE NOT NULL,
+      dropped_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      retention_days  INTEGER NOT NULL,
+      actions_summary JSONB DEFAULT '{}',
+      UNIQUE(partition_name)
+    );
+
+    CREATE OR REPLACE FUNCTION rbac.run_audit_retention(retention_days INTEGER DEFAULT 180)
+    RETURNS SETOF TEXT AS $$
+    DECLARE
+      cutoff DATE := (now() - (retention_days || ' days')::INTERVAL)::DATE;
+      rec RECORD;
+      row_count BIGINT;
+      part_year INTEGER;
+      part_month INTEGER;
+      part_start DATE;
+      part_end DATE;
+      action_summary JSONB;
+    BEGIN
+      FOR rec IN
+        SELECT c.relname AS part_name
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_inherits i ON i.inhrelid = c.oid
+        JOIN pg_class parent ON parent.oid = i.inhparent
+        WHERE n.nspname = 'rbac'
+          AND parent.relname = 'audit_log'
+          AND c.relkind = 'r'
+        ORDER BY c.relname
+      LOOP
+        BEGIN
+          part_year  := substring(rec.part_name FROM 'audit_log_(\d{4})_\d{2}')::INTEGER;
+          part_month := substring(rec.part_name FROM 'audit_log_\d{4}_(\d{2})')::INTEGER;
+          part_start := make_date(part_year, part_month, 1);
+          part_end   := part_start + INTERVAL '1 month';
+          IF part_end <= cutoff THEN
+            EXECUTE format('SELECT count(*) FROM rbac.%I', rec.part_name) INTO row_count;
+            EXECUTE format(
+              'SELECT COALESCE(jsonb_object_agg(action, cnt), ''{}''::jsonb) FROM (SELECT action, count(*) AS cnt FROM rbac.%I GROUP BY action) sub',
+              rec.part_name
+            ) INTO action_summary;
+            INSERT INTO rbac.audit_archive_manifest
+              (partition_name, row_count, date_range_from, date_range_to, retention_days, actions_summary)
+            VALUES
+              (rec.part_name, row_count, part_start, part_end, retention_days, action_summary)
+            ON CONFLICT (partition_name) DO NOTHING;
+            EXECUTE format('DROP TABLE rbac.%I', rec.part_name);
+            RETURN NEXT 'rbac.' || rec.part_name || ' (dropped, ' || row_count || ' rows)';
+          END IF;
+        EXCEPTION WHEN OTHERS THEN
+          RETURN NEXT 'rbac.' || rec.part_name || ' (skipped: ' || SQLERRM || ')';
+        END;
+      END LOOP;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    DO $$
+    BEGIN
+      CREATE EXTENSION IF NOT EXISTS pg_cron;
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'pg_cron not available';
+    END;
+    $$;
+
+    DO $$
+    BEGIN
+      PERFORM cron.unschedule('audit_create_partitions');
+    EXCEPTION WHEN OTHERS THEN NULL;
+    END;
+    $$;
+
+    DO $$
+    BEGIN
+      PERFORM cron.schedule(
+        'audit_create_partitions',
+        '5 0 1 * *',
+        $$SELECT rbac.ensure_audit_partitions(6)$$
+      );
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'Could not schedule audit_create_partitions: %', SQLERRM;
+    END;
+    $$;
+
+    DO $$
+    BEGIN
+      PERFORM cron.unschedule('audit_retention_cleanup');
+    EXCEPTION WHEN OTHERS THEN NULL;
+    END;
+    $$;
+
+    DO $$
+    BEGIN
+      PERFORM cron.schedule(
+        'audit_retention_cleanup',
+        '5 0 2 * *',
+        $$SELECT rbac.run_audit_retention(180)$$
+      );
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'Could not schedule audit_retention_cleanup: %', SQLERRM;
+    END;
+    $$;
+
+    COMMIT;
+
   # Note: keycloak schema creation and auth schema grants require superuser
   # privileges. They are handled by the db-init Job (see supabase-db.yaml)
   # which runs as supabase_admin after the database is ready.

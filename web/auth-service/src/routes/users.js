@@ -1,6 +1,7 @@
 const express = require('express');
 const { requirePermission } = require('../middleware');
-const { listUsers, assignRole, getUserRoleName, writeAuditLog, getAuditLog, getRolePermissionMatrix, setRolePermissions } = require('../rbac');
+const { listUsers, assignRole, getUserRoleName, getRolePermissionMatrix, setRolePermissions } = require('../rbac');
+const { writeAuditLogSafe, auditOptsFromReq, getAuditLog, streamAuditExport, ACTIONS } = require('../audit');
 
 const router = express.Router();
 
@@ -53,13 +54,12 @@ router.post('/:id/role', requirePermission('users.manage'), async (req, res) => 
     }
 
     await assignRole(req.params.id, role, req.user.id);
-    await writeAuditLog(
-      req.user.id,
-      'users.role.assign',
-      `user:${req.params.id}`,
-      { newRole: role, previousRole: targetRole },
-      req.ip
-    ).catch((err) => console.error('[users] Audit log write failed:', err.message));
+    writeAuditLogSafe({
+      ...auditOptsFromReq(req),
+      action: ACTIONS.USERS_ROLE_ASSIGN,
+      resource: `user:${req.params.id}`,
+      metadata: { newRole: role, previousRole: targetRole },
+    });
 
     res.json({ success: true, userId: req.params.id, role });
   } catch (err) {
@@ -68,7 +68,7 @@ router.post('/:id/role', requirePermission('users.manage'), async (req, res) => 
   }
 });
 
-// GET /auth/audit - audit log (admin only)
+// GET /auth/users/audit - audit log with server-side filtering (admin only)
 router.get('/audit', requirePermission('audit.read'), async (req, res) => {
   try {
     const limit = parseInt(req.query.limit || '100', 10);
@@ -79,11 +79,83 @@ router.get('/audit', requirePermission('audit.read'), async (req, res) => {
       return res.status(400).json({ error: 'limit and offset must be numbers' });
     }
 
-    const logs = await getAuditLog(limit, offset);
-    res.json({ logs });
+    const filters = {
+      limit,
+      offset,
+      action: req.query.action || null,
+      userId: req.query.user_id || null,
+      resource: req.query.resource || null,
+      ip: req.query.ip || null,
+      from: req.query.from || null,
+      to: req.query.to || null,
+    };
+
+    const result = await getAuditLog(filters);
+
+    // Self-audit: log that the audit log was read
+    writeAuditLogSafe({
+      ...auditOptsFromReq(req),
+      action: ACTIONS.AUDIT_READ,
+      resource: 'audit_log',
+      metadata: {
+        filters: Object.fromEntries(
+          Object.entries(filters).filter(([, v]) => v !== null)
+        ),
+        resultCount: result.logs.length,
+      },
+    });
+
+    res.json(result);
   } catch (err) {
     console.error('[users] getAuditLog error:', err.message);
     res.status(500).json({ error: 'Failed to retrieve audit log' });
+  }
+});
+
+// GET /auth/users/audit/export - export audit log as CSV or NDJSON (admin only)
+router.get('/audit/export', requirePermission('audit.read'), async (req, res) => {
+  try {
+    const format = (req.query.format || 'json').toLowerCase();
+    if (!['json', 'csv'].includes(format)) {
+      return res.status(400).json({ error: 'format must be "json" or "csv"' });
+    }
+
+    const filters = {
+      action: req.query.action || null,
+      userId: req.query.user_id || null,
+      resource: req.query.resource || null,
+      ip: req.query.ip || null,
+      from: req.query.from || null,
+      to: req.query.to || null,
+    };
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const ext = format === 'csv' ? 'csv' : 'ndjson';
+    const contentType = format === 'csv' ? 'text/csv' : 'application/x-ndjson';
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="audit-export-${timestamp}.${ext}"`);
+
+    // Self-audit: log export event
+    writeAuditLogSafe({
+      ...auditOptsFromReq(req),
+      action: ACTIONS.AUDIT_EXPORT,
+      resource: 'audit_log',
+      metadata: { format, filters: Object.fromEntries(
+        Object.entries(filters).filter(([, v]) => v !== null)
+      )},
+    });
+
+    await streamAuditExport(res, filters, format);
+    res.end();
+  } catch (err) {
+    console.error('[users] audit export error:', err.message);
+    // If headers already sent, we can't send JSON error
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to export audit log' });
+    } else {
+      res.end();
+    }
   }
 });
 
@@ -134,13 +206,12 @@ router.put('/roles/:role/permissions', requirePermission('users.manage'), async 
     }
 
     await setRolePermissions(role, permissions);
-    await writeAuditLog(
-      req.user.id,
-      'permissions.updated',
-      `role:${role}`,
-      { permissions, count: permissions.length },
-      req.ip
-    ).catch((err) => console.error('[users] Audit log write failed:', err.message));
+    writeAuditLogSafe({
+      ...auditOptsFromReq(req),
+      action: ACTIONS.PERMISSIONS_UPDATED,
+      resource: `role:${role}`,
+      metadata: { permissions, count: permissions.length },
+    });
 
     res.json({ success: true, role, permissions });
   } catch (err) {

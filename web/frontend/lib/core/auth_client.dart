@@ -137,6 +137,14 @@ class OpenClawInfo {
   };
 }
 
+/// Result of a paginated audit log query with total count.
+class AuditLogResult {
+  final List<Map<String, dynamic>> logs;
+  final int total;
+
+  const AuditLogResult({required this.logs, required this.total});
+}
+
 class AuthClient extends ChangeNotifier {
   AuthState _state = const AuthState();
   AuthState get state => _state;
@@ -445,9 +453,31 @@ class AuthClient extends ChangeNotifier {
     await completer;
   }
 
-  /// Fetch paginated audit log. Requires [audit.read] permission.
-  Future<List<Map<String, dynamic>>> fetchAuditLog({int limit = 50, int offset = 0}) async {
-    final uri = Uri.parse('$authServiceBaseUrl/auth/users/audit?limit=$limit&offset=$offset');
+  /// Fetch paginated audit log with server-side filters. Requires [audit.read] permission.
+  ///
+  /// Returns `{logs: [...], total: int, limit: int, offset: int}`.
+  Future<AuditLogResult> fetchAuditLog({
+    int limit = 50,
+    int offset = 0,
+    String? action,
+    String? userId,
+    String? resource,
+    String? ip,
+    String? from,
+    String? to,
+  }) async {
+    final params = <String, String>{
+      'limit': '$limit',
+      'offset': '$offset',
+    };
+    if (action != null && action.isNotEmpty) params['action'] = action;
+    if (userId != null && userId.isNotEmpty) params['user_id'] = userId;
+    if (resource != null && resource.isNotEmpty) params['resource'] = resource;
+    if (ip != null && ip.isNotEmpty) params['ip'] = ip;
+    if (from != null && from.isNotEmpty) params['from'] = from;
+    if (to != null && to.isNotEmpty) params['to'] = to;
+
+    final uri = Uri.parse('$authServiceBaseUrl/auth/users/audit').replace(queryParameters: params);
     final request = html.HttpRequest();
     request.open('GET', uri.toString());
     request.setRequestHeader('Authorization', 'Bearer ${_state.token}');
@@ -457,9 +487,29 @@ class AuthClient extends ChangeNotifier {
 
     final response = await completer;
     final body = jsonDecode(response);
-    return List<Map<String, dynamic>>.from(
+    final logs = List<Map<String, dynamic>>.from(
       (body['logs'] as List?)?.map((e) => Map<String, dynamic>.from(e as Map)) ?? [],
     );
+    final total = (body['total'] as num?)?.toInt() ?? logs.length;
+    return AuditLogResult(logs: logs, total: total);
+  }
+
+  /// Get the audit log export URL for downloading CSV/JSON.
+  String getAuditExportUrl({
+    String format = 'csv',
+    String? action,
+    String? userId,
+    String? from,
+    String? to,
+  }) {
+    final params = <String, String>{'format': format};
+    if (action != null && action.isNotEmpty) params['action'] = action;
+    if (userId != null && userId.isNotEmpty) params['user_id'] = userId;
+    if (from != null && from.isNotEmpty) params['from'] = from;
+    if (to != null && to.isNotEmpty) params['to'] = to;
+    return Uri.parse('$authServiceBaseUrl/auth/users/audit/export')
+        .replace(queryParameters: params)
+        .toString();
   }
 
   /// Fetch role-permission matrix. Requires [users.list] permission.

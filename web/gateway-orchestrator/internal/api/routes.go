@@ -47,6 +47,8 @@ func NewRouter(store *db.Store, k8s *k8sclient.Client, serviceToken, namespace, 
 	r.HandleFunc("/openclaws/{id}", h.handleDeleteOpenClaw).Methods(http.MethodDelete)
 	r.HandleFunc("/openclaws/{id}/status", h.handleOpenClawStatus).Methods(http.MethodGet)
 	r.HandleFunc("/openclaws/{id}/resolve", h.handleResolveOpenClaw).Methods(http.MethodGet)
+	r.HandleFunc("/openclaws/{id}/config", h.handleGetConfig).Methods(http.MethodGet)
+	r.HandleFunc("/openclaws/{id}/config", h.handlePatchConfig).Methods(http.MethodPatch)
 
 	// User assignment management (admin)
 	r.HandleFunc("/openclaws/{id}/assign", h.handleAssignUser).Methods(http.MethodPost)
@@ -410,6 +412,94 @@ func (h *Handler) handleUserOpenClaws(w http.ResponseWriter, r *http.Request) {
 		list = []db.UserOpenClaw{}
 	}
 	writeJSON(w, http.StatusOK, list)
+}
+
+// ── Config Management ───────────────────────────────────────────────────
+
+type patchConfigRequest struct {
+	Config json.RawMessage `json:"config"`
+	Restart bool           `json:"restart"`
+}
+
+func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	ctx := r.Context()
+
+	oc, err := h.store.GetOpenClawByID(ctx, id)
+	if err != nil || oc == nil {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "instance not found"})
+		return
+	}
+
+	resName := k8sclient.ResourceName(oc.Name)
+	configJSON, err := h.k8s.GetOpenClawConfig(ctx, resName)
+	if err != nil {
+		log.Printf("ERROR config get: %s: %v", oc.Name, err)
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to read config"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, configJSON)
+}
+
+func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	ctx := r.Context()
+
+	var req patchConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
+		return
+	}
+	if len(req.Config) == 0 {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "config is required"})
+		return
+	}
+
+	// Validate it's valid JSON
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(req.Config, &parsed); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "config must be valid JSON: " + err.Error()})
+		return
+	}
+
+	oc, err := h.store.GetOpenClawByID(ctx, id)
+	if err != nil || oc == nil {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "instance not found"})
+		return
+	}
+
+	resName := k8sclient.ResourceName(oc.Name)
+
+	// Pretty-print the JSON for readability in the ConfigMap
+	prettyJSON, err := json.MarshalIndent(parsed, "", "  ")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to format config"})
+		return
+	}
+
+	if err := h.k8s.UpdateOpenClawConfigMap(ctx, resName, string(prettyJSON)); err != nil {
+		log.Printf("ERROR config patch: %s: %v", oc.Name, err)
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to update config"})
+		return
+	}
+
+	restarted := false
+	if req.Restart {
+		if err := h.k8s.RestartOpenClawDeployment(ctx, resName); err != nil {
+			log.Printf("WARN config patch: restart failed for %s: %v", oc.Name, err)
+			// Config was saved, just restart failed -- don't error the whole request
+		} else {
+			restarted = true
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"ok":        true,
+		"restarted": restarted,
+	})
 }
 
 // --- helpers ---
