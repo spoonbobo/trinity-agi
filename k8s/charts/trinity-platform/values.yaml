@@ -16,6 +16,7 @@ secrets:
   keycloakClientSecret: ""
   grafanaPassword: ""
   vaultToken: "root"
+  zenApiKey: ""
   # Note: OPENCLAW_GATEWAY_TOKEN is now per-user, managed by the orchestrator.
   # This is the orchestrator's internal service token for inter-service auth.
   orchestratorServiceToken: ""
@@ -159,6 +160,19 @@ terminalProxy:
       memory: 256Mi
     requests:
       memory: 128Mi
+      cpu: 100m
+
+# ─── Copilot ───────────────────────────────────────────────────────────────
+copilot:
+  image: trinity-copilot:latest
+  port: 18802
+  replicas: 1
+  opencodePort: 4096
+  resources:
+    limits:
+      memory: 1Gi
+    requests:
+      memory: 512Mi
       cpu: 100m
 
 # ─── Frontend ──────────────────────────────────────────────────────────────

@@ -185,6 +185,11 @@ String tr(AppLanguage language, String key) {
       'zh-Hans': '环境变量',
       'zh-Hant': '環境變數',
     },
+    'copilot': {
+      'en': 'copilot',
+      'zh-Hans': '副驾',
+      'zh-Hant': '副駕',
+    },
     'schedule_simple': {
       'en': 'simple',
       'zh-Hans': '简易',

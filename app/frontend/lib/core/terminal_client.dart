@@ -594,24 +594,36 @@ class TerminalProxyClient extends ChangeNotifier {
 
   void shellInput(String data) {
     if (!_isShellActive || _channel == null) return;
-    _channel!.sink.add(jsonEncode({
-      'type': 'shell_input',
-      'data': data,
-    }));
+    try {
+      _channel!.sink.add(jsonEncode({
+        'type': 'shell_input',
+        'data': data,
+      }));
+    } catch (e) {
+      if (kDebugMode) debugPrint('[Terminal] shellInput failed: $e');
+    }
   }
 
   void shellResize(int cols, int rows) {
     if (!_isShellActive || _channel == null) return;
-    _channel!.sink.add(jsonEncode({
-      'type': 'shell_resize',
-      'cols': cols,
-      'rows': rows,
-    }));
+    try {
+      _channel!.sink.add(jsonEncode({
+        'type': 'shell_resize',
+        'cols': cols,
+        'rows': rows,
+      }));
+    } catch (e) {
+      if (kDebugMode) debugPrint('[Terminal] shellResize failed: $e');
+    }
   }
 
   void closeShell() {
     if (_channel == null) return;
-    _channel!.sink.add(jsonEncode({'type': 'shell_close'}));
+    try {
+      _channel!.sink.add(jsonEncode({'type': 'shell_close'}));
+    } catch (e) {
+      if (kDebugMode) debugPrint('[Terminal] closeShell failed: $e');
+    }
   }
 
   void clearOutput() {

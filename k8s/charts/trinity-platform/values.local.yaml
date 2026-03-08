@@ -13,6 +13,7 @@ secrets:
   grafanaPassword: "local-grafana-123"
   vaultToken: "root"
   orchestratorServiceToken: "local-orchestrator-token-123"
+  zenApiKey: ""
 
 urls:
   apiExternalUrl: "http://localhost"
@@ -91,6 +92,15 @@ terminalProxy:
       memory: 128Mi
     requests:
       memory: 64Mi
+      cpu: 50m
+
+copilot:
+  replicas: 1
+  resources:
+    limits:
+      memory: 1Gi
+    requests:
+      memory: 256Mi
       cpu: 50m
 
 ingress:

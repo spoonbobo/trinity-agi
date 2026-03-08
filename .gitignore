@@ -1,2 +1,4 @@
 nul
 kubectl.exe
+node_modules/
+app/copilot/node_modules/

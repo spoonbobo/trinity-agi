@@ -1,0 +1,28 @@
+FROM node:20-bookworm-slim
+
+WORKDIR /app
+ENV PATH="/app/node_modules/.bin:${PATH}"
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ripgrep ca-certificates bash \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY app/copilot/package.json app/copilot/package-lock.json* ./
+RUN npm ci --omit=dev
+
+COPY app/copilot/src ./src
+
+RUN mkdir -p /workspace/.opencode
+COPY opencode.jsonc /workspace/opencode.jsonc
+COPY opencode.jsonc /workspace/opencode.json
+COPY AGENT.md /workspace/AGENT.md
+COPY AGENT.md /workspace/AGENTS.md
+COPY .opencode /workspace/.opencode
+
+ENV COPILOT_WORKSPACE=/workspace
+ENV COPILOT_PORT=18802
+ENV OPENCODE_PORT=4096
+
+EXPOSE 18802
+
+CMD ["node", "src/index.js"]

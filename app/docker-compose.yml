@@ -354,6 +354,30 @@ services:
     networks:
       - trinity
 
+  # ─── Copilot Service ─────────────────────────────────────────────────────
+  copilot:
+    build:
+      context: ..
+      dockerfile: app/copilot/Dockerfile
+    container_name: trinity-copilot
+    restart: unless-stopped
+    environment:
+      COPILOT_PORT: 18802
+      OPENCODE_PORT: 4096
+      AUTH_SERVICE_URL: http://auth-service:18791
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost}
+      ZEN_API_KEY: ${ZEN_API_KEY:-}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:18802/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      auth-service:
+        condition: service_healthy
+    networks:
+      - trinity
+
   # ─── Frontend Builder (profile: build) ─────────────────────────────────
   frontend-builder:
     build:
@@ -395,6 +419,8 @@ services:
         condition: service_healthy
       terminal-proxy:
         condition: service_started
+      copilot:
+        condition: service_healthy
       auth-service:
         condition: service_healthy
       supabase-auth:

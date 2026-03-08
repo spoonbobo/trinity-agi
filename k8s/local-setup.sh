@@ -118,18 +118,20 @@ build_images() {
   eval "$(minikube docker-env)"
 
   local images=(
-    "trinity-auth-service:latest|$PROJECT_ROOT/web/auth-service"
-    "trinity-gateway-orchestrator:latest|$PROJECT_ROOT/web/gateway-orchestrator"
-    "trinity-gateway-proxy:latest|$PROJECT_ROOT/web/gateway-proxy"
-    "trinity-terminal-proxy:latest|$PROJECT_ROOT/web/terminal-proxy"
-    "trinity-frontend:latest|$PROJECT_ROOT/web/frontend"
-    "trinity-site:latest|$PROJECT_ROOT/site"
+    "trinity-auth-service:latest|$PROJECT_ROOT/app/auth-service|$PROJECT_ROOT/app/auth-service/Dockerfile"
+    "trinity-gateway-orchestrator:latest|$PROJECT_ROOT/app/gateway-orchestrator|$PROJECT_ROOT/app/gateway-orchestrator/Dockerfile"
+    "trinity-gateway-proxy:latest|$PROJECT_ROOT/app/gateway-proxy|$PROJECT_ROOT/app/gateway-proxy/Dockerfile"
+    "trinity-terminal-proxy:latest|$PROJECT_ROOT/app/terminal-proxy|$PROJECT_ROOT/app/terminal-proxy/Dockerfile"
+    "trinity-copilot:latest|$PROJECT_ROOT|$PROJECT_ROOT/app/copilot/Dockerfile"
+    "trinity-frontend:latest|$PROJECT_ROOT/app/frontend|$PROJECT_ROOT/app/frontend/Dockerfile"
+    "trinity-site:latest|$PROJECT_ROOT/site|$PROJECT_ROOT/site/Dockerfile"
   )
 
   for entry in "${images[@]}"; do
     local img="${entry%%|*}"
-    local ctx="${entry##*|}"
-    local dockerfile="$ctx/Dockerfile"
+    local rest="${entry#*|}"
+    local ctx="${rest%%|*}"
+    local dockerfile="${rest##*|}"
 
     if [ ! -f "$dockerfile" ]; then
       warn "Skipping $img -- no Dockerfile at $dockerfile"
@@ -137,16 +139,16 @@ build_images() {
     fi
 
     info "Building $img from $ctx..."
-    docker build -t "$img" "$ctx" || {
+    docker build -t "$img" -f "$dockerfile" "$ctx" || {
       warn "Failed to build $img -- skipping (you can build it later)"
       continue
     }
     ok "Built $img"
   done
 
-  if [ -f "$PROJECT_ROOT/web/Dockerfile.openclaw" ]; then
+  if [ -f "$PROJECT_ROOT/app/Dockerfile.openclaw" ]; then
     info "Building openclaw:local..."
-    docker build -t "openclaw:local" -f "$PROJECT_ROOT/web/Dockerfile.openclaw" "$PROJECT_ROOT/web" || {
+    docker build -t "openclaw:local" -f "$PROJECT_ROOT/app/Dockerfile.openclaw" "$PROJECT_ROOT/app" || {
       warn "Failed to build openclaw:local -- skipping"
     }
     ok "Built openclaw:local"
