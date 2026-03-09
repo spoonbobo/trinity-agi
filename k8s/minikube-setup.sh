@@ -16,6 +16,7 @@ DEFAULT_SUPERADMIN_EMAIL="${DEFAULT_SUPERADMIN_EMAIL:-admin@trinity.work}"
 DEFAULT_SUPERADMIN_PASSWORD="${DEFAULT_SUPERADMIN_PASSWORD:-admin123}"
 DEFAULT_KEYCLOAK_ADMIN_PASSWORD="${DEFAULT_KEYCLOAK_ADMIN_PASSWORD:-trinity-kc-admin-123}"
 DEFAULT_DB_PASSWORD="${DEFAULT_DB_PASSWORD:-trinity-pg-password-123}"
+BOOTSTRAP_SIGNUP_RETRIES="${BOOTSTRAP_SIGNUP_RETRIES:-5}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -34,6 +35,25 @@ read_secret_value() {
   local fallback="$3"
   kubectl get secret "$secret_name" -n "$NAMESPACE" -o "jsonpath={.data.${secret_key}}" \
     | base64 -d 2>/dev/null || echo "$fallback"
+}
+
+wait_for_supabase_db() {
+  local db_password="$1"
+
+  info "Waiting for supabase-db pod to be ready..."
+  kubectl wait --for=condition=Ready pod/supabase-db-0 -n "$NAMESPACE" --timeout=180s >/dev/null
+
+  info "Waiting for PostgreSQL to accept connections..."
+  for _ in $(seq 1 60); do
+    if kubectl exec supabase-db-0 -n "$NAMESPACE" -- env PGPASSWORD="$db_password" \
+      psql -U supabase_admin -d supabase -tAc "select 1;" >/dev/null 2>&1; then
+      ok "PostgreSQL is ready"
+      return
+    fi
+    sleep 2
+  done
+
+  fail "PostgreSQL was not ready in time"
 }
 
 install_brew() {
@@ -218,13 +238,13 @@ fix_ingress() {
 run_migrations() {
   local migrations_dir="$PROJECT_ROOT/app/supabase/migrations"
   local db_password
+  local output
   db_password="$(read_secret_value trinity-secrets SUPABASE_POSTGRES_PASSWORD "$DEFAULT_DB_PASSWORD")"
 
-  info "Waiting for supabase-db to be ready..."
-  kubectl wait --for=condition=Ready pod/supabase-db-0 -n "$NAMESPACE" --timeout=120s 2>/dev/null || true
+  wait_for_supabase_db "$db_password"
 
   info "Creating keycloak + rbac schemas with grants..."
-  kubectl exec supabase-db-0 -n "$NAMESPACE" -- env PGPASSWORD="$db_password" psql -U supabase_admin -d supabase -c "
+  kubectl exec supabase-db-0 -n "$NAMESPACE" -- env PGPASSWORD="$db_password" psql -v ON_ERROR_STOP=1 -U supabase_admin -d supabase -c "
     CREATE SCHEMA IF NOT EXISTS keycloak AUTHORIZATION postgres;
     GRANT ALL ON SCHEMA keycloak TO postgres;
     ALTER DEFAULT PRIVILEGES IN SCHEMA keycloak GRANT ALL ON TABLES TO postgres;
@@ -238,14 +258,27 @@ run_migrations() {
     ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA auth GRANT ALL ON TABLES TO postgres;
     ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA auth GRANT ALL ON SEQUENCES TO postgres;
     ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA auth GRANT ALL ON ROUTINES TO postgres;
+    GRANT USAGE, CREATE ON SCHEMA auth TO supabase_auth_admin;
+    GRANT ALL ON ALL TABLES IN SCHEMA auth TO supabase_auth_admin;
+    GRANT ALL ON ALL SEQUENCES IN SCHEMA auth TO supabase_auth_admin;
+    GRANT ALL ON ALL ROUTINES IN SCHEMA auth TO supabase_auth_admin;
+    ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA auth GRANT ALL ON TABLES TO supabase_auth_admin;
+    ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA auth GRANT ALL ON SEQUENCES TO supabase_auth_admin;
+    ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA auth GRANT ALL ON ROUTINES TO supabase_auth_admin;
     GRANT supabase_auth_admin TO postgres;
-  " 2>&1 || warn "Schema grants failed (may already exist)"
+  " >/dev/null
+  ok "Schema grants complete"
 
   info "Running RBAC migrations..."
   for f in "$migrations_dir"/0*.sql; do
     [ -f "$f" ] || continue
     info "  $(basename "$f")"
-    kubectl exec -i supabase-db-0 -n "$NAMESPACE" -- env PGPASSWORD="$db_password" psql -U postgres -d supabase < "$f" 2>&1 | sed -n '$p' || true
+    output="$(kubectl exec -i supabase-db-0 -n "$NAMESPACE" -- env PGPASSWORD="$db_password" \
+      psql -v ON_ERROR_STOP=1 -U supabase_admin -d supabase < "$f" 2>&1)" || {
+      printf '%s\n' "$output"
+      fail "Migration failed: $(basename "$f")"
+    }
+    printf '%s\n' "$output" | sed -n '$p'
   done
   ok "Migrations complete"
 }
@@ -255,6 +288,11 @@ bootstrap_admin() {
   local db_password
   local admin_email
   local admin_password
+  local signup_response
+  local user_count
+  local role_count
+  local attempt
+  local auth_ready=0
 
   anon_key="$(read_secret_value trinity-secrets SUPABASE_ANON_KEY "")"
   db_password="$(read_secret_value trinity-secrets SUPABASE_POSTGRES_PASSWORD "$DEFAULT_DB_PASSWORD")"
@@ -269,26 +307,68 @@ bootstrap_admin() {
   info "Waiting for supabase-auth to be ready..."
   for _ in $(seq 1 30); do
     if kubectl exec -n "$NAMESPACE" deploy/supabase-auth -- wget -qO- http://localhost:9999/health >/dev/null 2>&1; then
+      auth_ready=1
       break
     fi
     sleep 3
   done
+  if [ "$auth_ready" != "1" ]; then
+    fail "supabase-auth did not become ready before bootstrap"
+  fi
 
   info "Creating admin user ($admin_email)..."
   local signup_url="http://supabase-auth:9999/signup"
-  kubectl exec -n "$NAMESPACE" deploy/supabase-auth -- wget -qO- \
-    --post-data="{\"email\":\"$admin_email\",\"password\":\"$admin_password\"}" \
-    --header="Content-Type: application/json" \
-    --header="apikey: $anon_key" \
-    "$signup_url" 2>/dev/null || true
+
+  for attempt in $(seq 1 "$BOOTSTRAP_SIGNUP_RETRIES"); do
+    signup_response="$(kubectl exec -n "$NAMESPACE" deploy/supabase-auth -- wget -qO- \
+      --post-data="{\"email\":\"$admin_email\",\"password\":\"$admin_password\"}" \
+      --header="Content-Type: application/json" \
+      --header="apikey: $anon_key" \
+      "$signup_url" 2>/dev/null || true)"
+
+    if [ -n "$signup_response" ]; then
+      info "Signup attempt $attempt/$BOOTSTRAP_SIGNUP_RETRIES: response received from GoTrue"
+    else
+      warn "Signup attempt $attempt/$BOOTSTRAP_SIGNUP_RETRIES: no response from GoTrue"
+    fi
+
+    for _ in $(seq 1 20); do
+      user_count="$(kubectl exec supabase-db-0 -n "$NAMESPACE" -- env PGPASSWORD="$db_password" \
+        psql -U supabase_admin -d supabase -tAc "select count(*) from auth.users where email = '$admin_email';" 2>/dev/null || echo 0)"
+      user_count="$(printf '%s' "$user_count" | tr -d '[:space:]')"
+      if [ "$user_count" = "1" ]; then
+        break
+      fi
+      sleep 1
+    done
+
+    if [ "${user_count:-0}" = "1" ]; then
+      break
+    fi
+
+    warn "Admin user not visible in auth.users yet; retrying signup"
+    sleep 2
+  done
+
+  if [ "${user_count:-0}" != "1" ]; then
+    fail "Admin user was not created in auth.users after $BOOTSTRAP_SIGNUP_RETRIES attempts"
+  fi
 
   info "Assigning superadmin role..."
-  kubectl exec supabase-db-0 -n "$NAMESPACE" -- env PGPASSWORD="$db_password" psql -U postgres -d supabase -c "
+  kubectl exec supabase-db-0 -n "$NAMESPACE" -- env PGPASSWORD="$db_password" psql -v ON_ERROR_STOP=1 -U supabase_admin -d supabase -c "
     INSERT INTO rbac.user_roles (user_id, role_id)
     SELECT u.id, r.id FROM auth.users u, rbac.roles r
     WHERE u.email = '$admin_email' AND r.name = 'superadmin'
     ON CONFLICT DO NOTHING;
-  " 2>&1 || true
+  " >/dev/null
+
+  role_count="$(kubectl exec supabase-db-0 -n "$NAMESPACE" -- env PGPASSWORD="$db_password" \
+    psql -U supabase_admin -d supabase -tAc "select count(*) from rbac.user_roles ur join auth.users u on u.id = ur.user_id join rbac.roles r on r.id = ur.role_id where u.email = '$admin_email' and r.name = 'superadmin';" 2>/dev/null || echo 0)"
+  role_count="$(printf '%s' "$role_count" | tr -d '[:space:]')"
+  if [ "${role_count:-0}" != "1" ]; then
+    fail "Superadmin role assignment verification failed for $admin_email"
+  fi
+
   ok "Admin user bootstrapped"
 }
 

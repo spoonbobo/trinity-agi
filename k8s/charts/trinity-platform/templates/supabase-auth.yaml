@@ -46,7 +46,7 @@ spec:
                   name: trinity-secrets
                   key: SUPABASE_POSTGRES_PASSWORD
             - name: GOTRUE_DB_DATABASE_URL
-              value: "postgres://postgres:$(SUPABASE_POSTGRES_PASSWORD)@supabase-db:5432/supabase?sslmode=disable&search_path=auth"
+              value: "postgres://supabase_admin:$(SUPABASE_POSTGRES_PASSWORD)@supabase-db:5432/supabase?sslmode=disable&search_path=auth"
             - name: GOTRUE_SITE_URL
               value: {{ .Values.urls.siteUrl | quote }}
             - name: GOTRUE_URI_ALLOW_LIST
