@@ -364,6 +364,7 @@ services:
     environment:
       COPILOT_PORT: 18802
       OPENCODE_PORT: 4096
+      COPILOT_DEFAULT_MODEL: ${COPILOT_DEFAULT_MODEL:-moonshotai/kimi-k2.5}
       AUTH_SERVICE_URL: http://auth-service:18791
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost}
       ZEN_API_KEY: ${ZEN_API_KEY:-}

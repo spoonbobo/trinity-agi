@@ -46,6 +46,42 @@ class CopilotMessagesResponse {
   }
 }
 
+class CopilotStatus {
+  final String workspace;
+  final String desiredDefaultModel;
+  final bool desiredDefaultAvailable;
+  final Map<String, dynamic> defaults;
+  final List<String> connectedProviders;
+  final Map<String, dynamic>? user;
+  final Map<String, dynamic>? openclaw;
+
+  const CopilotStatus({
+    required this.workspace,
+    required this.desiredDefaultModel,
+    required this.desiredDefaultAvailable,
+    required this.defaults,
+    required this.connectedProviders,
+    this.user,
+    this.openclaw,
+  });
+
+  factory CopilotStatus.fromJson(Map<String, dynamic> json) {
+    return CopilotStatus(
+      workspace: json['workspace']?.toString() ?? '',
+      desiredDefaultModel: json['desiredDefaultModel']?.toString() ?? '',
+      desiredDefaultAvailable: json['desiredDefaultAvailable'] == true,
+      defaults: Map<String, dynamic>.from(json['defaults'] as Map? ?? const {}),
+      connectedProviders: List<String>.from(json['connectedProviders'] as List? ?? const []),
+      user: json['user'] is Map<String, dynamic>
+          ? json['user'] as Map<String, dynamic>
+          : (json['user'] is Map ? Map<String, dynamic>.from(json['user'] as Map) : null),
+      openclaw: json['openclaw'] is Map<String, dynamic>
+          ? json['openclaw'] as Map<String, dynamic>
+          : (json['openclaw'] is Map ? Map<String, dynamic>.from(json['openclaw'] as Map) : null),
+    );
+  }
+}
+
 class CopilotClient {
   String get _baseUrl => html.window.location.origin;
 
@@ -91,6 +127,19 @@ class CopilotClient {
       openclawId: openclawId,
     );
     return CopilotMessagesResponse.fromJson(response);
+  }
+
+  Future<CopilotStatus> fetchStatus(
+    String token, {
+    String? openclawId,
+  }) async {
+    final response = await _request(
+      'GET',
+      '/copilot/status',
+      token,
+      openclawId: openclawId,
+    );
+    return CopilotStatus.fromJson(response);
   }
 
   Future<CopilotMessagesResponse> sendPrompt(

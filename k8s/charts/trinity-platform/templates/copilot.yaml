@@ -28,6 +28,8 @@ spec:
               value: {{ .Values.copilot.port | quote }}
             - name: OPENCODE_PORT
               value: {{ .Values.copilot.opencodePort | quote }}
+            - name: COPILOT_DEFAULT_MODEL
+              value: {{ .Values.copilot.defaultModel | quote }}
             - name: AUTH_SERVICE_URL
               value: "http://auth-service:{{ .Values.authService.port }}"
             - name: ALLOWED_ORIGINS

@@ -13,6 +13,8 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "http://localhost")
   .filter(Boolean);
 const WORKSPACE_DIR = process.env.COPILOT_WORKSPACE || "/workspace";
 const ZEN_API_KEY = process.env.ZEN_API_KEY || "";
+const DESIRED_DEFAULT_MODEL =
+  process.env.COPILOT_DEFAULT_MODEL || "moonshotai/kimi-k2.5";
 
 process.chdir(WORKSPACE_DIR);
 process.env.PATH = `/app/node_modules/.bin:${process.env.PATH || ""}`;
@@ -230,6 +232,52 @@ if (ZEN_API_KEY) {
   }
 }
 
+async function getProviderState() {
+  const providers = unwrap(await opencodeClient.config.providers());
+  const providerList = Array.isArray(providers?.providers)
+    ? providers.providers
+    : [];
+  const defaults = providers?.default ?? {};
+  const availableModels = [];
+  for (const provider of providerList) {
+    const providerId = provider?.id;
+    const models = provider?.models ?? {};
+    for (const modelId of Object.keys(models)) {
+      availableModels.push(`${providerId}/${modelId}`);
+    }
+  }
+  const desiredAvailable = availableModels.includes(DESIRED_DEFAULT_MODEL);
+  return {
+    defaults,
+    providerList,
+    availableModels,
+    desiredAvailable,
+  };
+}
+
+async function ensureDefaultModelIfAvailable() {
+  const state = await getProviderState();
+  if (!state.desiredAvailable) {
+    console.warn(
+      `[copilot] desired default model not available under current provider auth: ${DESIRED_DEFAULT_MODEL}`,
+    );
+    return;
+  }
+  const currentDefault = state.defaults?.default || state.defaults?.chat || state.defaults?.opencode;
+  if (currentDefault === DESIRED_DEFAULT_MODEL) return;
+  try {
+    await opencodeClient.config.update({
+      body: { model: DESIRED_DEFAULT_MODEL },
+      query: { directory: WORKSPACE_DIR },
+    });
+    console.log(`[copilot] default model set to ${DESIRED_DEFAULT_MODEL}`);
+  } catch (error) {
+    console.error("[copilot] failed to set default model:", error);
+  }
+}
+
+await ensureDefaultModelIfAvailable();
+
 const sessionMap = new Map();
 
 function sessionScopeKey(userId, openclawId) {
@@ -291,6 +339,31 @@ app.get("/health", (_req, res) => {
 
 app.use(requireSuperadmin);
 app.use(resolveSelectedOpenClaw);
+
+app.get("/status", async (req, res) => {
+  try {
+    const state = await getProviderState();
+    res.json({
+      workspace: WORKSPACE_DIR,
+      desiredDefaultModel: DESIRED_DEFAULT_MODEL,
+      desiredDefaultAvailable: state.desiredAvailable,
+      defaults: state.defaults,
+      connectedProviders: state.providerList
+        .filter((provider) => provider?.id && Object.keys(provider?.models ?? {}).length > 0)
+        .map((provider) => provider.id),
+      user: {
+        id: req.user.id,
+        email: req.user.email,
+        role: req.user.role,
+        permissions: req.user.permissions,
+      },
+      openclaw: req.selectedOpenClaw,
+    });
+  } catch (error) {
+    console.error("[copilot] status error:", error);
+    res.status(500).json({ error: "failed to load copilot status" });
+  }
+});
 
 app.get("/session", async (req, res) => {
   try {

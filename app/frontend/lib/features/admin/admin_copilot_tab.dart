@@ -25,6 +25,7 @@ class _AdminCopilotTabState extends ConsumerState<AdminCopilotTab> {
   final _scrollController = ScrollController();
 
   List<CopilotMessage> _messages = const [];
+  CopilotStatus? _status;
   String? _sessionId;
   String? _error;
   bool _loading = false;
@@ -55,12 +56,17 @@ class _AdminCopilotTabState extends ConsumerState<AdminCopilotTab> {
     });
 
     try {
+      final status = await _client.fetchStatus(
+        token,
+        openclawId: authState.activeOpenClawId,
+      );
       final response = await _client.fetchMessages(
         token,
         openclawId: authState.activeOpenClawId,
       );
       if (!mounted) return;
       setState(() {
+        _status = status;
         _sessionId = response.sessionId;
         _messages = response.messages;
         _lastOpenClawId = authState.activeOpenClawId;
@@ -95,6 +101,7 @@ class _AdminCopilotTabState extends ConsumerState<AdminCopilotTab> {
         _messages = response.messages;
         _error = null;
       });
+      await _refreshStatusSilently();
       _scrollToBottom();
     } catch (e) {
       if (!mounted) return;
@@ -121,10 +128,25 @@ class _AdminCopilotTabState extends ConsumerState<AdminCopilotTab> {
         _messages = response.messages;
         _error = null;
       });
+      await _refreshStatusSilently();
     } catch (e) {
       if (!mounted) return;
       ToastService.showError(context, e.toString());
     }
+  }
+
+  Future<void> _refreshStatusSilently() async {
+    final authState = ref.read(authClientProvider).state;
+    final token = authState.token;
+    if (token == null || token.isEmpty) return;
+    try {
+      final status = await _client.fetchStatus(
+        token,
+        openclawId: authState.activeOpenClawId,
+      );
+      if (!mounted) return;
+      setState(() => _status = status);
+    } catch (_) {}
   }
 
   void _scrollToBottom() {
@@ -170,6 +192,26 @@ class _AdminCopilotTabState extends ConsumerState<AdminCopilotTab> {
                 authState.activeOpenClaw?.name ?? 'no active openclaw',
                 style: theme.textTheme.labelSmall?.copyWith(color: t.fgMuted),
               ),
+              if (_status != null) ...[
+                const SizedBox(width: 12),
+                Text(
+                  _status!.desiredDefaultAvailable
+                      ? 'model: ${_status!.defaults['opencode'] ?? _status!.defaults['chat'] ?? _status!.defaults['default'] ?? '-'}'
+                      : 'model missing: ${_status!.desiredDefaultModel}',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: _status!.desiredDefaultAvailable
+                        ? t.fgTertiary
+                        : t.statusWarning,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  _status!.connectedProviders.isEmpty
+                      ? 'providers: none'
+                      : 'providers: ${_status!.connectedProviders.join(', ')}',
+                  style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary),
+                ),
+              ],
               if (_sessionId != null) ...[
                 const SizedBox(width: 12),
                 Text(
@@ -199,6 +241,17 @@ class _AdminCopilotTabState extends ConsumerState<AdminCopilotTab> {
             child: Text(
               _error!,
               style: theme.textTheme.bodySmall?.copyWith(color: t.statusError),
+            ),
+          ),
+        if (_status != null)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: t.border, width: 0.5)),
+            ),
+            child: Text(
+              'role=${_status!.user?['role'] ?? '-'}  perms=${(_status!.user?['permissions'] as List?)?.length ?? 0}  workspace=${_status!.workspace}',
+              style: theme.textTheme.labelSmall?.copyWith(color: t.fgMuted),
             ),
           ),
         Expanded(
