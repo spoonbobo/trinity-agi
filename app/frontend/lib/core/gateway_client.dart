@@ -286,24 +286,33 @@ class GatewayClient extends ChangeNotifier {
   }
 
   void _onDone() {
+    final closeCode = _channel?.closeCode;
     _state = ConnectionState.disconnected;
     _failPendingCompleters('Connection closed');
     notifyListeners();
     if (_shouldReconnect) {
-      // #3: Auto-reconnect with exponential backoff
-      _scheduleReconnect();
+      // If closed with 1008 (policy violation / rate limited), use longer backoff
+      final rateLimited = closeCode == 1008;
+      _scheduleReconnect(rateLimited: rateLimited);
     }
   }
 
-  void _scheduleReconnect() {
+  void _scheduleReconnect({bool rateLimited = false}) {
     if (_disposed) return;
     _reconnectAttempts++;
-    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s max
-    final delay = Duration(
-        seconds: (_reconnectAttempts <= 5)
-            ? (1 << (_reconnectAttempts - 1))
-            : 30);
-    if (kDebugMode) debugPrint('[GW] reconnecting in ${delay.inSeconds}s (attempt $_reconnectAttempts)');
+
+    Duration delay;
+    if (rateLimited) {
+      // Rate-limited: wait 15s minimum, scaling up to 60s
+      delay = Duration(seconds: _reconnectAttempts <= 3 ? 15 : 60);
+    } else {
+      // Normal: exponential backoff 1s, 2s, 4s, 8s, 16s, 30s max
+      delay = Duration(
+          seconds: (_reconnectAttempts <= 5)
+              ? (1 << (_reconnectAttempts - 1))
+              : 30);
+    }
+    if (kDebugMode) debugPrint('[GW] reconnecting in ${delay.inSeconds}s (attempt $_reconnectAttempts${rateLimited ? ", rate-limited" : ""})');
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(delay, () {
       if (!_disposed &&
