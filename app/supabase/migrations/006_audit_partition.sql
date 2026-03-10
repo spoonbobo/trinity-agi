@@ -12,6 +12,19 @@
 
 BEGIN;
 
+-- Skip entire migration if audit_log is already partitioned (re-run safe)
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'rbac' AND c.relname = 'audit_log' AND c.relkind = 'p'
+  ) THEN
+    RAISE EXCEPTION '__SKIP_MIGRATION__';
+  END IF;
+END;
+$$;
+
 -- ── Step 1: Rename old table ────────────────────────────────────────────
 ALTER TABLE rbac.audit_log RENAME TO audit_log_legacy;
 

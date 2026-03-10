@@ -2,13 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:html' as html;
 
 enum AppFontFamily {
-  // Monospace
-  ibmPlexMono,
-  jetBrainsMono,
-  monofur,
-  // Sans-serif
-  inter,
-  geistSans,
+  dmSans,
 }
 
 const _themeModeStorageKey = 'trinity_theme_mode';
@@ -16,60 +10,41 @@ const _fontFamilyStorageKey = 'trinity_font_family';
 
 String appFontFamilyToStorage(AppFontFamily family) {
   switch (family) {
-    case AppFontFamily.ibmPlexMono:
-      return 'ibm-plex-mono';
-    case AppFontFamily.jetBrainsMono:
-      return 'jetbrains-mono';
-    case AppFontFamily.monofur:
-      return 'monofur';
-    case AppFontFamily.inter:
-      return 'inter';
-    case AppFontFamily.geistSans:
-      return 'geist-sans';
+    case AppFontFamily.dmSans:
+      return 'dm-sans';
   }
 }
 
 AppFontFamily appFontFamilyFromStorage(String? value) {
   switch (value) {
-    case 'jetbrains-mono':
-      return AppFontFamily.jetBrainsMono;
-    case 'monofur':
-      return AppFontFamily.monofur;
+    case 'dm-sans':
+      return AppFontFamily.dmSans;
     case 'inter':
-      return AppFontFamily.inter;
+      return AppFontFamily.dmSans;
     case 'geist-sans':
-      return AppFontFamily.geistSans;
+      return AppFontFamily.dmSans;
+    case 'jetbrains-mono':
+      return AppFontFamily.dmSans;
+    case 'monofur':
+      return AppFontFamily.dmSans;
     case 'ibm-plex-mono':
-      return AppFontFamily.ibmPlexMono;
+      return AppFontFamily.dmSans;
     default:
-      return AppFontFamily.monofur;
+      return AppFontFamily.dmSans;
   }
 }
 
 String appFontFamilyLabel(AppFontFamily family) {
   switch (family) {
-    case AppFontFamily.ibmPlexMono:
-      return 'IBM Plex Mono';
-    case AppFontFamily.jetBrainsMono:
-      return 'JetBrains Mono';
-    case AppFontFamily.monofur:
-      return 'Monofur';
-    case AppFontFamily.inter:
-      return 'Inter';
-    case AppFontFamily.geistSans:
-      return 'Geist';
+    case AppFontFamily.dmSans:
+      return 'DM Sans';
   }
 }
 
-/// Whether the font is monospace (true) or proportional sans-serif (false).
+/// Whether the selected app font is monospace.
 bool appFontFamilyIsMono(AppFontFamily family) {
   switch (family) {
-    case AppFontFamily.ibmPlexMono:
-    case AppFontFamily.jetBrainsMono:
-    case AppFontFamily.monofur:
-      return true;
-    case AppFontFamily.inter:
-    case AppFontFamily.geistSans:
+    case AppFontFamily.dmSans:
       return false;
   }
 }
@@ -77,16 +52,8 @@ bool appFontFamilyIsMono(AppFontFamily family) {
 /// Returns the font family name as declared in pubspec.yaml
 String fontFamilyName(AppFontFamily family) {
   switch (family) {
-    case AppFontFamily.ibmPlexMono:
-      return 'IBMPlexMono';
-    case AppFontFamily.jetBrainsMono:
-      return 'JetBrainsMono';
-    case AppFontFamily.monofur:
-      return 'Monofur';
-    case AppFontFamily.inter:
-      return 'Inter';
-    case AppFontFamily.geistSans:
-      return 'GeistSans';
+    case AppFontFamily.dmSans:
+      return 'DMSans';
   }
 }
 

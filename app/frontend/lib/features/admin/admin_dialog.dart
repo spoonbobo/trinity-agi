@@ -9,11 +9,9 @@ import 'admin_audit_tab.dart';
 import 'admin_health_tab.dart';
 import 'admin_rbac_tab.dart';
 import 'admin_sessions_tab.dart';
-import 'admin_channels_tab.dart';
 import 'admin_openclaws_tab.dart';
-import 'admin_copilot_tab.dart';
 
-enum AdminTab { users, audit, health, rbac, sessions, channels, openclaws, copilot }
+enum AdminTab { users, audit, health, rbac, sessions, openclaws }
 
 class AdminDialog extends ConsumerStatefulWidget {
   final AdminTab initialTab;
@@ -72,11 +70,7 @@ class _AdminDialogState extends ConsumerState<AdminDialog> {
                   _tabToggle(tr(language, 'sessions'), AdminTab.sessions),
                   if (isSuperadmin) ...[
                     const SizedBox(width: 12),
-                    _tabToggle(tr(language, 'channels'), AdminTab.channels),
-                    const SizedBox(width: 12),
                     _tabToggle('openclaws', AdminTab.openclaws),
-                    const SizedBox(width: 12),
-                    _tabToggle(tr(language, 'copilot'), AdminTab.copilot),
                   ],
                   const Spacer(),
                   GestureDetector(
@@ -123,12 +117,8 @@ class _AdminDialogState extends ConsumerState<AdminDialog> {
         return const AdminRbacTab();
       case AdminTab.sessions:
         return const AdminSessionsTab();
-      case AdminTab.channels:
-        return const AdminChannelsTab();
       case AdminTab.openclaws:
         return const AdminOpenClawsTab();
-      case AdminTab.copilot:
-        return const AdminCopilotTab();
     }
   }
 }

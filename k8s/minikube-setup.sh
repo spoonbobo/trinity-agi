@@ -275,6 +275,10 @@ run_migrations() {
     info "  $(basename "$f")"
     output="$(kubectl exec -i supabase-db-0 -n "$NAMESPACE" -- env PGPASSWORD="$db_password" \
       psql -v ON_ERROR_STOP=1 -U supabase_admin -d supabase < "$f" 2>&1)" || {
+      if printf '%s\n' "$output" | rg -q '__SKIP_MIGRATION__'; then
+        ok "  $(basename "$f") (already applied, skipped)"
+        continue
+      fi
       printf '%s\n' "$output"
       fail "Migration failed: $(basename "$f")"
     }

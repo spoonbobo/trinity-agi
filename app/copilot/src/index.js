@@ -15,6 +15,14 @@ const WORKSPACE_DIR = process.env.COPILOT_WORKSPACE || "/workspace";
 const ZEN_API_KEY = process.env.ZEN_API_KEY || "";
 const DESIRED_DEFAULT_MODEL =
   process.env.COPILOT_DEFAULT_MODEL || "moonshotai/kimi-k2.5";
+const ORCHESTRATOR_URL =
+  process.env.ORCHESTRATOR_URL || "http://gateway-orchestrator:18801";
+const ORCHESTRATOR_SERVICE_TOKEN =
+  process.env.ORCHESTRATOR_SERVICE_TOKEN || "";
+const COPILOT_PROMPT_TIMEOUT_MS = parseInt(
+  process.env.COPILOT_PROMPT_TIMEOUT_MS || "120000",
+  10,
+);
 
 process.chdir(WORKSPACE_DIR);
 process.env.PATH = `/app/node_modules/.bin:${process.env.PATH || ""}`;
@@ -53,7 +61,13 @@ function normalizeMessages(entries = []) {
     .filter((entry) => entry.role === "user" || entry.role === "assistant");
 }
 
-function buildContext(user, selectedOpenClaw) {
+function buildMessagesPayload(entries = []) {
+  return {
+    messages: normalizeMessages(entries),
+  };
+}
+
+function buildContext(user, selectedOpenClaw, openclawReachable) {
   const lines = [
     "You are Trinity Copilot, a superadmin-only assistant for the Trinity platform.",
     "You are running inside an OpenCode-backed copilot service.",
@@ -64,9 +78,27 @@ function buildContext(user, selectedOpenClaw) {
     lines.push(
       `Current selected OpenClaw: ${selectedOpenClaw.name} (${selectedOpenClaw.id}).`,
     );
-    lines.push(
-      "Limit any operational guidance or control context to that selected OpenClaw.",
-    );
+    if (openclawReachable) {
+      lines.push(
+        "The user has an interactive PTY terminal side-by-side with this chat.",
+        "Do not claim you executed commands unless the user pasted command output.",
+        "Prefer giving exact `openclaw ...` commands for the user to run in PTY.",
+        "Available openclaw CLI commands:",
+        "  status, health [--json], skills list [--json], crons list [--json],",
+        "  hooks list [--json], hooks check [--json], sessions [--json], logs,",
+        "  channels, tools, memory, config get, config validate, doctor, models.",
+        "Do not assume a channel is available just because docs mention it.",
+        "For channel setup, first ask the user to run `openclaw channels capabilities --channel <name>` and inspect the result.",
+        "When the user asks about live state (health/skills/channels/etc), provide the command(s) to run and then interpret results they share.",
+        "Always add --json flag when available to get structured output.",
+        "If WhatsApp channel is unsupported in this runtime, say so clearly and offer alternatives (for example `wacli` skill for history/send workflows, or upgrading to a runtime with WhatsApp Web channel support).",
+      );
+    } else {
+      lines.push(
+        "The OpenClaw backend could not be resolved. Operational commands are unavailable.",
+        "Limit to guidance and advice only.",
+      );
+    }
   } else {
     lines.push(
       "No OpenClaw is currently selected. Ask the user to select one if a task depends on OpenClaw-specific context.",
@@ -157,6 +189,36 @@ async function resolveSelectedOpenClaw(req, res, next) {
   } catch (error) {
     console.error("[copilot] openclaw resolution error:", error);
     res.status(502).json({ error: "failed to validate selected openclaw" });
+  }
+}
+
+const openclawBackendCache = new Map();
+
+async function resolveOpenClawBackend(openclawId) {
+  if (!ORCHESTRATOR_SERVICE_TOKEN) return null;
+  const cached = openclawBackendCache.get(openclawId);
+  if (cached && Date.now() - cached.ts < 60000) return cached.backend;
+
+  try {
+    const resp = await fetch(
+      `${ORCHESTRATOR_URL}/openclaws/${openclawId}/resolve`,
+      {
+        headers: {
+          Authorization: `Bearer ${ORCHESTRATOR_SERVICE_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+      },
+    );
+    if (!resp.ok) {
+      console.error(`[copilot] orchestrator resolve failed: ${resp.status}`);
+      return null;
+    }
+    const backend = await resp.json();
+    openclawBackendCache.set(openclawId, { backend, ts: Date.now() });
+    return backend;
+  } catch (error) {
+    console.error("[copilot] orchestrator resolve error:", error);
+    return null;
   }
 }
 
@@ -258,8 +320,9 @@ async function getProviderState() {
 async function ensureDefaultModelIfAvailable() {
   const state = await getProviderState();
   if (!state.desiredAvailable) {
-    console.warn(
-      `[copilot] desired default model not available under current provider auth: ${DESIRED_DEFAULT_MODEL}`,
+    const actual = state.defaults?.default || state.defaults?.chat || state.defaults?.opencode || "(none)";
+    console.log(
+      `[copilot] desired default model not available: ${DESIRED_DEFAULT_MODEL} -- using ${actual}`,
     );
     return;
   }
@@ -279,9 +342,27 @@ async function ensureDefaultModelIfAvailable() {
 await ensureDefaultModelIfAvailable();
 
 const sessionMap = new Map();
+const modelMap = new Map();
 
 function sessionScopeKey(userId, openclawId) {
   return `${userId}:${openclawId || "none"}`;
+}
+
+function parseModelId(qualified) {
+  if (!qualified) return null;
+  const slash = qualified.indexOf("/");
+  if (slash === -1) return null;
+  return { providerID: qualified.slice(0, slash), modelID: qualified.slice(slash + 1) };
+}
+
+function getSelectedModel(user, selectedOpenClaw) {
+  const key = sessionScopeKey(user.id, selectedOpenClaw?.id || null);
+  return modelMap.get(key) || null;
+}
+
+function setSelectedModel(user, selectedOpenClaw, qualified) {
+  const key = sessionScopeKey(user.id, selectedOpenClaw?.id || null);
+  modelMap.set(key, qualified);
 }
 
 async function ensureSession(user, selectedOpenClaw) {
@@ -303,14 +384,13 @@ async function ensureSession(user, selectedOpenClaw) {
   return sessionId;
 }
 
-async function injectContext(sessionId, user, selectedOpenClaw) {
-  await opencodeClient.session.prompt({
-    path: { id: sessionId },
-    body: {
-      noReply: true,
-      parts: [{ type: "text", text: buildContext(user, selectedOpenClaw) }],
-    },
-  });
+async function getSystemContext(user, selectedOpenClaw) {
+  let openclawReachable = false;
+  if (selectedOpenClaw && ORCHESTRATOR_SERVICE_TOKEN) {
+    const backend = await resolveOpenClawBackend(selectedOpenClaw.id);
+    openclawReachable = !!backend;
+  }
+  return buildContext(user, selectedOpenClaw, openclawReachable);
 }
 
 const app = express();
@@ -343,10 +423,13 @@ app.use(resolveSelectedOpenClaw);
 app.get("/status", async (req, res) => {
   try {
     const state = await getProviderState();
+    const defaultModel = state.defaults?.opencode || state.defaults?.chat || state.defaults?.default || null;
+    const selected = getSelectedModel(req.user, req.selectedOpenClaw);
     res.json({
       workspace: WORKSPACE_DIR,
       desiredDefaultModel: DESIRED_DEFAULT_MODEL,
       desiredDefaultAvailable: state.desiredAvailable,
+      actualModel: selected || defaultModel,
       defaults: state.defaults,
       connectedProviders: state.providerList
         .filter((provider) => provider?.id && Object.keys(provider?.models ?? {}).length > 0)
@@ -390,9 +473,10 @@ app.get("/messages", async (req, res) => {
     const result = unwrap(
       await opencodeClient.session.messages({ path: { id: sessionId } }),
     );
+    const payload = buildMessagesPayload(Array.isArray(result) ? result : []);
     res.json({
       sessionId,
-      messages: normalizeMessages(Array.isArray(result) ? result : []),
+      messages: payload.messages,
     });
   } catch (error) {
     console.error("[copilot] messages error:", error);
@@ -417,28 +501,115 @@ app.post("/prompt", async (req, res) => {
     }
 
     const sessionId = await ensureSession(req.user, req.selectedOpenClaw);
-    await injectContext(sessionId, req.user, req.selectedOpenClaw);
-    await withTimeout(
-      opencodeClient.session.prompt({
-        path: { id: sessionId },
-        body: {
-          parts: [{ type: "text", text: message }],
-        },
-      }),
-      30000,
-      "copilot prompt",
-    );
+    const systemContext = await getSystemContext(req.user, req.selectedOpenClaw);
+    const selectedModel = getSelectedModel(req.user, req.selectedOpenClaw);
+    const modelParam = parseModelId(selectedModel);
+    const promptBody = {
+      system: systemContext,
+      parts: [{ type: "text", text: message }],
+    };
+    if (modelParam) promptBody.model = modelParam;
+    let promptTimedOut = false;
+    try {
+      await withTimeout(
+        opencodeClient.session.prompt({
+          path: { id: sessionId },
+          body: promptBody,
+        }),
+        COPILOT_PROMPT_TIMEOUT_MS,
+        "copilot prompt",
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("timed out")) {
+        promptTimedOut = true;
+        console.warn(`[copilot] ${error.message}; returning latest available messages`);
+      } else {
+        throw error;
+      }
+    }
 
     const result = unwrap(
       await opencodeClient.session.messages({ path: { id: sessionId } }),
     );
-    res.json({
+    const payload = buildMessagesPayload(Array.isArray(result) ? result : []);
+    const responseBody = {
       sessionId,
-      messages: normalizeMessages(Array.isArray(result) ? result : []),
-    });
+      messages: payload.messages,
+    };
+    if (promptTimedOut) {
+      return res.status(202).json({
+        ...responseBody,
+        pending: true,
+        warning: `copilot response still processing after ${COPILOT_PROMPT_TIMEOUT_MS}ms`,
+      });
+    }
+    res.json(responseBody);
   } catch (error) {
     console.error("[copilot] prompt error:", error);
     res.status(500).json({ error: "failed to send copilot prompt" });
+  }
+});
+
+function connectedModels(state) {
+  const connected = [];
+  for (const provider of state.providerList) {
+    if (!provider?.id) continue;
+    const models = provider?.models ?? {};
+    if (Object.keys(models).length === 0) continue;
+    for (const modelId of Object.keys(models)) {
+      connected.push(`${provider.id}/${modelId}`);
+    }
+  }
+  return connected;
+}
+
+app.get("/models", async (req, res) => {
+  try {
+    const state = await getProviderState();
+    const selected = getSelectedModel(req.user, req.selectedOpenClaw);
+    const defaultModel =
+      state.defaults?.opencode ||
+      state.defaults?.chat ||
+      state.defaults?.default ||
+      null;
+    res.json({
+      current: selected || defaultModel,
+      default: defaultModel,
+      available: connectedModels(state),
+    });
+  } catch (error) {
+    console.error("[copilot] models error:", error);
+    res.status(500).json({ error: "failed to list models" });
+  }
+});
+
+app.post("/model", async (req, res) => {
+  const model = req.body?.model?.toString().trim() || "";
+  if (!model) {
+    return res.status(400).json({ error: "model is required" });
+  }
+
+  try {
+    const parsed = parseModelId(model);
+    if (!parsed) {
+      return res.status(400).json({ error: "model must be in provider/model format" });
+    }
+    setSelectedModel(req.user, req.selectedOpenClaw, model);
+    console.log(`[copilot] model selected: ${model} (user=${req.user.email})`);
+    const state = await getProviderState();
+    const defaultModel =
+      state.defaults?.opencode ||
+      state.defaults?.chat ||
+      state.defaults?.default ||
+      null;
+    res.json({
+      current: model,
+      default: defaultModel,
+      available: connectedModels(state),
+    });
+  } catch (error) {
+    console.error("[copilot] set model error:", error);
+    res.status(500).json({ error: "failed to set model" });
   }
 });
 
@@ -456,6 +627,36 @@ app.post("/session/reset", async (req, res) => {
     console.error("[copilot] reset error:", error);
     res.status(500).json({ error: "failed to reset copilot session" });
   }
+});
+
+app.get("/openclaw/info", async (req, res) => {
+  if (!req.selectedOpenClaw) {
+    return res.status(400).json({ error: "no openclaw selected" });
+  }
+  try {
+    const backend = await resolveOpenClawBackend(req.selectedOpenClaw.id);
+    if (!backend) {
+      return res.status(502).json({ error: "could not resolve openclaw backend" });
+    }
+    res.json({
+      name: req.selectedOpenClaw.name,
+      id: req.selectedOpenClaw.id,
+      host: backend.host,
+      port: backend.port,
+      reachable: true,
+    });
+  } catch (error) {
+    console.error("[copilot] openclaw info error:", error);
+    res.status(500).json({ error: "failed to get openclaw info" });
+  }
+});
+
+app.post("/openclaw/exec", async (req, res) => {
+  res.status(410).json({
+    error: "endpoint disabled",
+    message:
+      "Run commands in the side-by-side PTY terminal and paste output here for analysis.",
+  });
 });
 
 const server = app.listen(PORT, "0.0.0.0", () => {

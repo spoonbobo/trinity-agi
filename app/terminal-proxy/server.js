@@ -274,6 +274,25 @@ function validateCommand(cmd) {
   };
 }
 
+function redactCommandForLogs(cleanCmd) {
+  if (!cleanCmd || typeof cleanCmd !== 'string') return cleanCmd;
+
+  const configSetMatch = cleanCmd.match(/^config\s+set\s+([^\s]+)\s+([\s\S]+)$/);
+  if (configSetMatch) {
+    const configPath = configSetMatch[1] || '';
+    if (/(^|\.)(botToken|appToken|token|password|secret|apiKey|webhookSecret)$/i.test(configPath)) {
+      return `config set ${configPath} [REDACTED]`;
+    }
+  }
+
+  return cleanCmd
+    .replace(/(--password\s+)("[^"]*"|'[^']*'|\S+)/gi, '$1[REDACTED]')
+    .replace(/(--token\s+)("[^"]*"|'[^']*'|\S+)/gi, '$1[REDACTED]')
+    .replace(/(--app-token\s+)("[^"]*"|'[^']*'|\S+)/gi, '$1[REDACTED]')
+    .replace(/(--bot-token\s+)("[^"]*"|'[^']*'|\S+)/gi, '$1[REDACTED]')
+    .replace(/(--secret\s+)("[^"]*"|'[^']*'|\S+)/gi, '$1[REDACTED]');
+}
+
 // ── Command execution ──────────────────────────────────────────────────
 // Build the argv array for Docker mode.
 function _buildDockerArgs(validation, token, openclawId) {
@@ -333,7 +352,7 @@ function _buildKubectlArgs(validation, podName, podToken, openclawId) {
 
 // Spawn the child process and wire up ws streaming.
 function _spawnAndStream(ws, bin, args, env, cleanCmd) {
-  safeSend(ws, { type: 'system', message: `$ ${cleanCmd}` });
+  safeSend(ws, { type: 'system', message: `$ ${redactCommandForLogs(cleanCmd)}` });
 
   const child = spawn(bin, args, { env });
 
@@ -513,7 +532,9 @@ const wss = new WebSocket.Server({
 
 // ── Per-connection rate limiting ───────────────────────────────────────
 const MSG_RATE_WINDOW = 10_000; // 10 seconds
-const MSG_RATE_MAX = 30;        // max 30 messages per window
+const MSG_RATE_MAX = 60;        // max 60 non-shell messages per window
+const SHELL_INPUT_RATE_WINDOW = 1_000; // 1 second
+const SHELL_INPUT_RATE_MAX = 500;      // max 500 shell input frames per second
 
 // ── Server-initiated heartbeat (detect dead connections) ───────────────
 const HEARTBEAT_INTERVAL = 30_000; // 30 seconds
@@ -572,19 +593,37 @@ wss.on('connection', (ws, req) => {
 
   // Rate limiting state
   let msgTimestamps = [];
+  let shellInputTimestamps = [];
+  let lastShellRateWarningAt = 0;
 
   ws.on('message', async (message) => {
-    // Rate limiting
-    const now = Date.now();
-    msgTimestamps = msgTimestamps.filter(t => t > now - MSG_RATE_WINDOW);
-    if (msgTimestamps.length >= MSG_RATE_MAX) {
-      safeSend(ws, { type: 'error', message: 'Rate limit exceeded. Slow down.' });
-      return;
-    }
-    msgTimestamps.push(now);
-
     try {
       const data = JSON.parse(message);
+      const now = Date.now();
+
+      if (data?.type === 'shell_input') {
+        shellInputTimestamps = shellInputTimestamps.filter(
+          (t) => t > now - SHELL_INPUT_RATE_WINDOW,
+        );
+        if (shellInputTimestamps.length >= SHELL_INPUT_RATE_MAX) {
+          if (now - lastShellRateWarningAt > 2000) {
+            safeSend(ws, {
+              type: 'error',
+              message: 'Terminal input temporarily throttled.',
+            });
+            lastShellRateWarningAt = now;
+          }
+          return;
+        }
+        shellInputTimestamps.push(now);
+      } else {
+        msgTimestamps = msgTimestamps.filter((t) => t > now - MSG_RATE_WINDOW);
+        if (msgTimestamps.length >= MSG_RATE_MAX) {
+          safeSend(ws, { type: 'error', message: 'Rate limit exceeded. Slow down.' });
+          return;
+        }
+        msgTimestamps.push(now);
+      }
 
       switch (data.type) {
         case 'auth':
@@ -744,7 +783,7 @@ wss.on('connection', (ws, req) => {
             }
 
             log('info', 'Command executed', {
-              command: validation.cleanCmd,
+              command: redactCommandForLogs(validation.cleanCmd),
               userRole,
               tier,
               execMode: EXEC_MODE,
@@ -1035,7 +1074,13 @@ wss.on('connection', (ws, req) => {
               cols,
               rows,
               cwd: process.cwd(),
-              env: { ...process.env, OPENCLAW_GATEWAY_TOKEN: (resolvedPod && resolvedPod.token) || GATEWAY_TOKEN },
+              env: {
+                ...process.env,
+                OPENCLAW_GATEWAY_TOKEN: (resolvedPod && resolvedPod.token) || GATEWAY_TOKEN,
+                TERM: 'xterm-256color',
+                COLORTERM: 'truecolor',
+                PS1: '[\\w]\\$ ',
+              },
             });
 
             log('info', 'Shell session started', { userId, userRole, pid: shellProcess.pid, action: 'shell.start' });

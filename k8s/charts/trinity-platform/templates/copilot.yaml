@@ -16,6 +16,7 @@ spec:
       labels:
         {{- include "trinity.componentLabels" (dict "component" "copilot" "Release" .Release "Chart" .Chart) | nindent 8 }}
     spec:
+      serviceAccountName: copilot
       containers:
         - name: copilot
           image: {{ include "trinity.image" (dict "image" .Values.copilot.image "global" .Values.global) }}
@@ -39,6 +40,13 @@ spec:
                 secretKeyRef:
                   name: trinity-secrets
                   key: ZEN_API_KEY
+            - name: ORCHESTRATOR_URL
+              value: "http://gateway-orchestrator:{{ .Values.gatewayOrchestrator.port }}"
+            - name: ORCHESTRATOR_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: ORCHESTRATOR_SERVICE_TOKEN
           livenessProbe:
             httpGet:
               path: /health
@@ -71,3 +79,41 @@ spec:
       name: http
   selector:
     {{- include "trinity.selectorLabels" (dict "component" "copilot") | nindent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: copilot
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "copilot" "Release" .Release "Chart" .Chart) | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: copilot-openclaw-exec
+  namespace: {{ include "trinity.namespace" . }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: copilot-openclaw-exec
+  namespace: {{ include "trinity.namespace" . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: copilot-openclaw-exec
+subjects:
+  - kind: ServiceAccount
+    name: copilot
+    namespace: {{ include "trinity.namespace" . }}

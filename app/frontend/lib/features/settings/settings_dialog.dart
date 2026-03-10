@@ -114,37 +114,11 @@ class SettingsDialog extends ConsumerWidget {
                     // Font
                     Text(tr(language, 'font'), style: theme.textTheme.labelSmall?.copyWith(color: t.fgTertiary)),
                     const SizedBox(height: 6),
-                    // Monospace group
-                    Row(
+                    Wrap(
+                      spacing: 12,
                       children: [
-                        Text('monospace', style: TextStyle(fontSize: 9, color: t.fgDisabled)),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Wrap(
-                            spacing: 12,
-                            children: [
-                              for (final f in AppFontFamily.values.where(appFontFamilyIsMono))
-                                _toggle(theme, t, appFontFamilyLabel(f), font == f, () => setFont(f)),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    // Sans-serif group
-                    Row(
-                      children: [
-                        Text('sans-serif', style: TextStyle(fontSize: 9, color: t.fgDisabled)),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Wrap(
-                            spacing: 12,
-                            children: [
-                              for (final f in AppFontFamily.values.where((f) => !appFontFamilyIsMono(f)))
-                                _toggle(theme, t, appFontFamilyLabel(f), font == f, () => setFont(f)),
-                            ],
-                          ),
-                        ),
+                        for (final f in AppFontFamily.values)
+                          _toggle(theme, t, appFontFamilyLabel(f), font == f, () => setFont(f)),
                       ],
                     ),
                     const SizedBox(height: 18),

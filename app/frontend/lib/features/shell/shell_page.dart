@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:html' as html;
+import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -23,6 +24,8 @@ import '../automations/automations_dialog.dart';
 
 import '../settings/settings_dialog.dart';
 import '../admin/admin_dialog.dart';
+import '../admin/admin_copilot_tab.dart';
+import '../admin/admin_channels_tab.dart';
 import '../sessions/session_drawer.dart';
 import '../command_palette/command_palette.dart';
 import '../notifications/notification_center.dart';
@@ -64,7 +67,10 @@ class _ShellPageState extends ConsumerState<ShellPage> {
   int _mobilePanel = 0;
   // Track previous gateway state for reconnect toasts
   gw.ConnectionState? _prevGatewayState;
+  TerminalConnectionState? _prevTerminalState;
   String? _lastObservedOpenClawId;
+  bool _switchInProgress = false;
+  String? _switchTargetName;
 
   @override
   void initState() {
@@ -111,10 +117,13 @@ class _ShellPageState extends ConsumerState<ShellPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final authClient = ref.read(authClientProvider);
       final client = ref.read(gatewayClientProvider);
+      final terminalClient = ref.read(terminalClientProvider);
       // Track connection state changes for reconnect toasts
       _prevGatewayState = client.state;
+      _prevTerminalState = terminalClient.state;
       _lastObservedOpenClawId = authClient.state.activeOpenClawId;
       client.addListener(_onGatewayStateChange);
+      terminalClient.addListener(_onTerminalStateChange);
       // Listen for OpenClaw status changes (e.g. user gets unassigned)
       authClient.addListener(_onAuthStateChange);
       _syncOpenClawRouting();
@@ -211,6 +220,8 @@ class _ShellPageState extends ConsumerState<ShellPage> {
       // User lost all assignments -- disconnect
       gwClient.disconnect();
       terminalClient.disconnect();
+      _switchInProgress = false;
+      _switchTargetName = null;
       _syncOpenClawRouting();
       return;
     }
@@ -219,6 +230,9 @@ class _ShellPageState extends ConsumerState<ShellPage> {
 
     if (authClient.openClawStatus == OpenClawStatus.ready) {
       if (openClawChanged) {
+        _switchInProgress = true;
+        _switchTargetName = authClient.state.activeOpenClaw?.name ?? 'openclaw';
+        ToastService.showInfo(context, 'switching to ${_switchTargetName!}...');
         gwClient.disconnect();
         terminalClient.disconnect();
       }
@@ -240,6 +254,7 @@ class _ShellPageState extends ConsumerState<ShellPage> {
     _domClickSub?.cancel();
     ref.read(authClientProvider).removeListener(_onAuthStateChange);
     ref.read(gatewayClientProvider).removeListener(_onGatewayStateChange);
+    ref.read(terminalClientProvider).removeListener(_onTerminalStateChange);
     _approvalSub?.cancel();
     _notifSub?.cancel();
     _dragEnterSub?.cancel();
@@ -251,31 +266,64 @@ class _ShellPageState extends ConsumerState<ShellPage> {
 
   void _onGatewayStateChange() {
     if (!mounted) return;
-    final client = ref.read(gatewayClientProvider);
-    final current = client.state;
+    final gwClient = ref.read(gatewayClientProvider);
+    final current = gwClient.state;
     final prev = _prevGatewayState;
     _prevGatewayState = current;
 
-    // Skip the initial connecting -> connected transition on first load
-    if (prev == gw.ConnectionState.connecting && current == gw.ConnectionState.connected && prev == _prevGatewayState) {
-      return;
-    }
-
-    // Disconnected or error: show "reconnecting" toast
     if ((current == gw.ConnectionState.disconnected || current == gw.ConnectionState.error) &&
-        prev == gw.ConnectionState.connected) {
+        prev == gw.ConnectionState.connected &&
+        !_switchInProgress) {
       ToastService.showError(context, 'gateway disconnected, reconnecting...');
     }
 
-    // Reconnected: show "reconnected" toast
     if (current == gw.ConnectionState.connected &&
-        (prev == gw.ConnectionState.disconnected ||
-         prev == gw.ConnectionState.error ||
-         prev == gw.ConnectionState.connecting)) {
-      // Only show reconnect toast if we were previously connected (not first connect)
-      if (prev != gw.ConnectionState.connecting) {
-        ToastService.showInfo(context, 'reconnected');
-      }
+        (prev == gw.ConnectionState.disconnected || prev == gw.ConnectionState.error) &&
+        !_switchInProgress) {
+      ToastService.showInfo(context, 'gateway reconnected');
+    }
+
+    _maybeShowSwitchConnectionToast();
+  }
+
+  void _onTerminalStateChange() {
+    if (!mounted) return;
+    final terminalClient = ref.read(terminalClientProvider);
+    final current = terminalClient.state;
+    final prev = _prevTerminalState;
+    _prevTerminalState = current;
+
+    if ((current == TerminalConnectionState.disconnected ||
+            current == TerminalConnectionState.error) &&
+        prev == TerminalConnectionState.connected &&
+        !_switchInProgress) {
+      ToastService.showError(context, 'terminal disconnected');
+    }
+
+    _maybeShowSwitchConnectionToast();
+  }
+
+  void _maybeShowSwitchConnectionToast() {
+    if (!_switchInProgress || !mounted) return;
+    final gwState = ref.read(gatewayClientProvider).state;
+    final terminalState = ref.read(terminalClientProvider).state;
+    final target = _switchTargetName ??
+        ref.read(authClientProvider).state.activeOpenClaw?.name ??
+        'openclaw';
+
+    if (gwState == gw.ConnectionState.connected &&
+        terminalState == TerminalConnectionState.connected) {
+      ToastService.showInfo(context, 'connected to $target');
+      _switchInProgress = false;
+      _switchTargetName = null;
+      return;
+    }
+
+    if (gwState == gw.ConnectionState.error ||
+        terminalState == TerminalConnectionState.error) {
+      ToastService.showError(context, 'failed to connect to $target');
+      _switchInProgress = false;
+      _switchTargetName = null;
     }
   }
 
@@ -348,6 +396,74 @@ class _ShellPageState extends ConsumerState<ShellPage> {
       builder: (_) => const AdminDialog());
   }
 
+  void _showChannelsDialog() {
+    final t = ShellTokens.of(context);
+    _dialogs.showUnique(
+      context: context,
+      id: 'channels',
+      builder: (_) => Dialog(
+        backgroundColor: t.surfaceBase,
+        shape: RoundedRectangleBorder(
+          borderRadius: kShellBorderRadius,
+          side: BorderSide(color: t.border, width: 0.5),
+        ),
+        child: Container(
+          width: MediaQuery.of(context).size.width * 0.86,
+          height: MediaQuery.of(context).size.height * 0.84,
+          constraints: const BoxConstraints(maxWidth: 1060, maxHeight: 780),
+          child: const AdminChannelsTab(),
+        ),
+      ),
+    );
+  }
+
+  void _showCopilotDialog() {
+    final t = ShellTokens.of(context);
+    _dialogs.showUnique(
+      context: context,
+      id: 'copilot',
+      builder: (_) => Dialog(
+        backgroundColor: t.surfaceBase,
+        shape: RoundedRectangleBorder(
+          borderRadius: kShellBorderRadius,
+          side: BorderSide(color: t.border, width: 0.5),
+        ),
+        child: Container(
+          width: MediaQuery.of(context).size.width * 0.88,
+          height: MediaQuery.of(context).size.height * 0.84,
+          constraints: const BoxConstraints(maxWidth: 1240, maxHeight: 820),
+          child: const AdminCopilotTab(),
+        ),
+      ),
+    );
+  }
+
+  void _showOpenClawSwitcher({
+    required List<OpenClawInfo> openclaws,
+    required String? activeId,
+  }) {
+    DialogService.instance.showUnique(
+      context: context,
+      id: 'openclaw-switcher',
+      barrierColor: Colors.black54,
+      builder: (_) => _OpenClawSwitcherDialog(
+        openclaws: openclaws,
+        activeId: activeId,
+        onSelect: (id) {
+          Navigator.of(context).pop();
+          if (id == activeId) return;
+          final gwClient = ref.read(gatewayClientProvider);
+          final terminalClient = ref.read(terminalClientProvider);
+          gwClient.disconnect();
+          terminalClient.disconnect();
+          ref.read(authClientProvider).selectOpenClaw(id);
+          _syncOpenClawRouting();
+          _connectActiveOpenClaw();
+        },
+      ),
+    );
+  }
+
   void _toggleSessionDrawer() {
     setState(() => _showSessionDrawer = !_showSessionDrawer);
   }
@@ -366,6 +482,7 @@ class _ShellPageState extends ConsumerState<ShellPage> {
     final language = ref.read(languageProvider);
     final authState = ref.read(authClientProvider).state;
     final isAdmin = authState.hasPermission('users.list');
+    final isSuperadmin = authState.role == AuthRole.superadmin;
 
     final commands = <CommandItem>[
       CommandItem(
@@ -382,9 +499,16 @@ class _ShellPageState extends ConsumerState<ShellPage> {
         action: _toggleSessionDrawer,
         category: 'sessions',
       ),
+      if (isSuperadmin)
+        CommandItem(
+          label: tr(language, 'configure'),
+          icon: Icons.smart_toy,
+          action: _showCopilotDialog,
+          category: 'navigation',
+        ),
       if (authState.hasPermission('acp.manage'))
         CommandItem(
-          label: 'agents',
+          label: tr(language, 'agents'),
           icon: Icons.hub,
           action: _showAgentWorkspaceDialog,
           category: 'navigation',
@@ -401,6 +525,13 @@ class _ShellPageState extends ConsumerState<ShellPage> {
         action: _showAutomationsDialog,
         category: 'navigation',
       ),
+      if (isSuperadmin)
+        CommandItem(
+          label: tr(language, 'channels'),
+          icon: Icons.alt_route,
+          action: _showChannelsDialog,
+          category: 'navigation',
+        ),
       CommandItem(
         label: tr(language, 'settings'),
         icon: Icons.settings,
@@ -705,24 +836,23 @@ class _ShellPageState extends ConsumerState<ShellPage> {
     final authState = authClient.state;
     final openClawStatus = authClient.openClawStatus;
     final isAdmin = authState.hasPermission('users.list');
-    final labelStyle = Theme.of(context).textTheme.labelSmall?.copyWith(color: t.fgMuted)
-        ?? TextStyle(fontSize: 10, color: t.fgMuted);
     final unreadCount = ref.watch(notificationProvider).unreadCount;
     final activeSession = ref.watch(activeSessionProvider);
-    final reconnectTooltip = switch (openClawStatus) {
+    final activeSessionLabel = activeSession
+        .replaceAll(RegExp(r'\s*\((light|dark|system)\)\s*', caseSensitive: false), '')
+        .trim();
+    final groupTooltip = switch (openClawStatus) {
       OpenClawStatus.loading => 'loading openclaws...',
       OpenClawStatus.unknown => 'loading openclaws...',
       OpenClawStatus.noOpenClaws => 'no openclaw assigned',
       OpenClawStatus.error => authClient.openClawError ?? 'failed to load openclaws',
-      OpenClawStatus.ready => 'click to reconnect',
+      OpenClawStatus.ready => dotLabel,
     };
-    final reconnectLabel = switch (openClawStatus) {
-      OpenClawStatus.loading => 'waiting',
-      OpenClawStatus.unknown => 'waiting',
-      OpenClawStatus.noOpenClaws => 'assign required',
-      OpenClawStatus.error => 'retry',
-      OpenClawStatus.ready => 'reconnect',
-    };
+    final shortcutLabel =
+        (defaultTargetPlatform == TargetPlatform.macOS ||
+            defaultTargetPlatform == TargetPlatform.iOS)
+        ? 'cmd+k'
+        : 'ctrl+k';
 
     return Container(
       height: 28,
@@ -730,106 +860,129 @@ class _ShellPageState extends ConsumerState<ShellPage> {
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: t.border, width: 0.5)),
       ),
-      child: Row(
-        children: [
-          // Session drawer toggle
-          GestureDetector(
-            onTap: _toggleSessionDrawer,
-            child: MouseRegion(
-              cursor: SystemMouseCursors.click,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.forum_outlined, size: 12, color: t.fgMuted),
-                  const SizedBox(width: 6),
-                ],
-              ),
-            ),
-          ),
-          GestureDetector(
-            onTap: state != gw.ConnectionState.connected && state != gw.ConnectionState.connecting
-                ? () => _connectActiveOpenClaw(showFeedback: true)
-                : null,
-            child: MouseRegion(
-              cursor: state != gw.ConnectionState.connected && state != gw.ConnectionState.connecting
-                  ? SystemMouseCursors.click
-                  : SystemMouseCursors.basic,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Tooltip(
-                    message: state != gw.ConnectionState.connected ? reconnectTooltip : dotLabel,
-                    child: Container(
-                      width: 6, height: 6,
-                      decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
+        child: Row(
+          children: [
+            Tooltip(
+              message: groupTooltip,
+              child: GestureDetector(
+                onTap: _toggleSessionDrawer,
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                    decoration: BoxDecoration(
+                      borderRadius: kShellBorderRadiusSm,
+                      border: Border.all(
+                        color: state == gw.ConnectionState.connected
+                            ? t.accentPrimary.withOpacity(0.35)
+                            : t.border,
+                        width: 0.5,
+                      ),
+                      color: state == gw.ConnectionState.connected
+                          ? t.accentPrimary.withOpacity(0.08)
+                          : t.surfaceBase,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 6,
+                          height: 6,
+                          decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          activeSessionLabel.isEmpty ? 'main' : activeSessionLabel,
+                          style: TextStyle(fontSize: 9, color: t.accentPrimary, fontWeight: FontWeight.w600),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(width: 7),
+                        Icon(Icons.forum_outlined, size: 11, color: t.fgMuted),
+                        const SizedBox(width: 3),
+                        Icon(Icons.unfold_more, size: 8, color: t.fgMuted),
+                      ],
                     ),
                   ),
-                  // Show text label when not connected (clickable)
-                  if (state != gw.ConnectionState.connected) ...[
-                    const SizedBox(width: 4),
-                    Text(
-                      dotLabel,
-                      style: TextStyle(fontSize: 9, color: dotColor),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      reconnectLabel,
-                      style: TextStyle(fontSize: 9, color: t.accentPrimary),
-                    ),
-                  ],
-                ],
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: 6),
-          // Active session indicator (always visible)
-          Padding(
-            padding: const EdgeInsets.only(right: 6),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-              decoration: BoxDecoration(
-                borderRadius: kShellBorderRadiusSm,
-                border: Border.all(color: t.border, width: 0.5),
-              ),
-              child: Text(activeSession,
-                style: TextStyle(fontSize: 8, color: t.accentPrimary),
-                overflow: TextOverflow.ellipsis),
-            ),
-          ),
-          // OpenClaw selector badge (always clickable, opens switcher dialog)
-          if (authState.openclaws.isNotEmpty) ...[
-            _OpenClawSelector(
-              openclaws: authState.openclaws,
-              activeId: authState.activeOpenClawId,
-              labelStyle: labelStyle,
-              t: t,
-              onSelect: (id) {
-                if (id == authState.activeOpenClawId) return;
-                final gwClient = ref.read(gatewayClientProvider);
-                final terminalClient = ref.read(terminalClientProvider);
-                gwClient.disconnect();
-                terminalClient.disconnect();
-                ref.read(authClientProvider).selectOpenClaw(id);
-                _syncOpenClawRouting();
-                _connectActiveOpenClaw();
-              },
-            ),
-          ],
-          const Spacer(),
-          if (!isMobile) ...[
-            if (authState.hasPermission('acp.manage')) ...[
-              _HoverLabel(text: 'agents', style: labelStyle!, onTap: _showAgentWorkspaceDialog),
-              const SizedBox(width: 14),
+            if (!isMobile) ...[
+              const SizedBox(width: 10),
+              if (authState.openclaws.isNotEmpty) ...[
+                if (authState.role == AuthRole.superadmin) ...[
+                  _ConfigureWithCopilotLink(
+                    clawName: authState.activeOpenClaw?.name ?? 'claw',
+                    configureLabel: tr(language, 'configure'),
+                    switchLabel: tr(language, 'switch'),
+                    onSwitchTap: () => _showOpenClawSwitcher(
+                      openclaws: authState.openclaws,
+                      activeId: authState.activeOpenClawId,
+                    ),
+                    onTap: _showCopilotDialog,
+                    t: t,
+                  ),
+                ] else
+                  _StatusModeActionLink(
+                    label: tr(language, 'switch_claw'),
+                    onTap: () => _showOpenClawSwitcher(
+                      openclaws: authState.openclaws,
+                      activeId: authState.activeOpenClawId,
+                    ),
+                    t: t,
+                    textColor: t.accentPrimary,
+                  ),
+              ],
             ],
-            _HoverLabel(text: tr(language, 'skills'), style: labelStyle!, onTap: _showSkillsDialog),
-            const SizedBox(width: 14),
-            _HoverLabel(text: tr(language, 'automations'), style: labelStyle!, onTap: _showAutomationsDialog),
+            const Spacer(),
+            if (!isMobile) ...[
+              if (authState.hasPermission('acp.manage')) ...[
+                _StatusModeActionLink(
+                  label: tr(language, 'agents'),
+                  onTap: _showAgentWorkspaceDialog,
+                  t: t,
+                  textColor: t.accentSecondary,
+                ),
+                const SizedBox(width: 8),
+              ],
+              _StatusModeActionLink(
+                label: tr(language, 'skills'),
+                onTap: _showSkillsDialog,
+                t: t,
+                textColor: t.accentPrimary,
+              ),
+              const SizedBox(width: 8),
+              _StatusModeActionLink(
+                label: tr(language, 'automations'),
+                onTap: _showAutomationsDialog,
+                t: t,
+                textColor: t.statusWarning,
+              ),
+              if (authState.role == AuthRole.superadmin) ...[
+                const SizedBox(width: 8),
+                _StatusModeActionLink(
+                  label: tr(language, 'channels'),
+                  onTap: _showChannelsDialog,
+                  t: t,
+                  textColor: t.fgPrimary,
+                ),
+              ],
+              const SizedBox(width: 10),
             if (isAdmin) ...[
-              const SizedBox(width: 14),
-              _HoverLabel(text: tr(language, 'admin'), style: labelStyle!, onTap: _showAdminDialog),
+              _StatusModeActionLink(
+                label: tr(language, 'admin'),
+                onTap: _showAdminDialog,
+                t: t,
+                textColor: t.fgPrimary,
+              ),
             ],
             const SizedBox(width: 14),
-            _HoverLabel(text: tr(language, 'settings'), style: labelStyle!, onTap: _showSettingsDialog),
+            GestureDetector(
+              onTap: _showSettingsDialog,
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: Icon(Icons.settings, size: 14, color: t.fgMuted),
+              ),
+            ),
             const SizedBox(width: 14),
           ],
           // Notification bell
@@ -868,13 +1021,125 @@ class _ShellPageState extends ConsumerState<ShellPage> {
                     borderRadius: kShellBorderRadiusSm,
                     border: Border.all(color: t.border, width: 0.5),
                   ),
-                  child: Text('ctrl+k',
+                  child: Text(shortcutLabel,
                     style: TextStyle(fontSize: 8, color: t.fgDisabled)),
                 ),
               ),
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+class _ConfigureWithCopilotLink extends StatelessWidget {
+  final String clawName;
+  final String configureLabel;
+  final String switchLabel;
+  final VoidCallback onSwitchTap;
+  final VoidCallback onTap;
+  final ShellTokens t;
+
+  const _ConfigureWithCopilotLink({
+    super.key,
+    required this.clawName,
+    required this.configureLabel,
+    required this.switchLabel,
+    required this.onSwitchTap,
+    required this.onTap,
+    required this.t,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        GestureDetector(
+          onTap: onTap,
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: RichText(
+              text: TextSpan(
+                children: [
+                  TextSpan(
+                    text: '$configureLabel ',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: t.accentPrimary,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  TextSpan(
+                    text: clawName,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: t.accentSecondary,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        GestureDetector(
+          onTap: onSwitchTap,
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  switchLabel,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: t.fgMuted,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Icon(Icons.swap_horiz, size: 12, color: t.fgMuted),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _StatusModeActionLink extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  final ShellTokens t;
+  final Color textColor;
+
+  const _StatusModeActionLink({
+    required this.label,
+    required this.onTap,
+    required this.t,
+    required this.textColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return GestureDetector(
+      onTap: onTap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: Text(
+          label,
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: textColor,
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
       ),
     );
   }

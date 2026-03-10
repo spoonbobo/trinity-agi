@@ -153,6 +153,8 @@ data:
               ports:
                 - containerPort: {{`{{ .Values.port }}`}}
                   name: gateway
+                - containerPort: 18793
+                  name: opencode-api
               env:
                 - name: OPENCLAW_GATEWAY_TOKEN
                   valueFrom:
@@ -245,5 +247,8 @@ data:
         - port: {{`{{ .Values.port }}`}}
           targetPort: gateway
           name: gateway
+        - port: 18793
+          targetPort: opencode-api
+          name: opencode-api
       selector:
         {{`{{- include "openclaw.selectorLabels" . | nindent 4 }}`}}

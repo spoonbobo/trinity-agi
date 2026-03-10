@@ -19,6 +19,7 @@ dependencies:
   json_annotation: ^4.9.0
   flutter_markdown: ^0.7.6
   pointer_interceptor: ^0.10.1
+  xterm: ^4.0.0
 
 dev_dependencies:
   flutter_test:
@@ -30,40 +31,18 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   fonts:
-    # --- Monospace fonts ---
-    - family: IBMPlexMono
+    - family: DMSans
       fonts:
-        - asset: fonts/IBMPlexMono-Regular.ttf
-        - asset: fonts/IBMPlexMono-Bold.ttf
-          weight: 700
-        - asset: fonts/IBMPlexMono-Italic.ttf
+        - asset: fonts/DMSans-Variable.ttf
+        - asset: fonts/DMSans-Italic-Variable.ttf
           style: italic
+    # --- Monospace used for terminal/code surfaces ---
     - family: JetBrainsMono
       fonts:
         - asset: fonts/JetBrainsMono-Regular.ttf
         - asset: fonts/JetBrainsMono-Bold.ttf
           weight: 700
         - asset: fonts/JetBrainsMono-Italic.ttf
-          style: italic
-    - family: Monofur
-      fonts:
-        - asset: fonts/monofur-Regular.ttf
-        - asset: fonts/monofur-Bold.ttf
-          weight: 700
-    # --- Sans-serif fonts ---
-    - family: Inter
-      fonts:
-        - asset: fonts/Inter-Regular.ttf
-        - asset: fonts/Inter-Bold.ttf
-          weight: 700
-        - asset: fonts/Inter-Italic.ttf
-          style: italic
-    - family: GeistSans
-      fonts:
-        - asset: fonts/Geist-Regular.ttf
-        - asset: fonts/Geist-Bold.ttf
-          weight: 700
-        - asset: fonts/Geist-RegularItalic.ttf
           style: italic
     # --- CJK + symbol fallback fonts ---
     - family: NotoSansSC

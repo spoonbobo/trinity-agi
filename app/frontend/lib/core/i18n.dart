@@ -180,6 +180,26 @@ String tr(AppLanguage language, String key) {
       'zh-Hans': '频道',
       'zh-Hant': '頻道',
     },
+    'agents': {
+      'en': 'agents',
+      'zh-Hans': '智能体',
+      'zh-Hant': '智能體',
+    },
+    'switch_claw': {
+      'en': 'switch claw',
+      'zh-Hans': '切换爪',
+      'zh-Hant': '切換爪',
+    },
+    'configure': {
+      'en': 'configure',
+      'zh-Hans': '配置',
+      'zh-Hant': '配置',
+    },
+    'switch': {
+      'en': 'switch',
+      'zh-Hans': '切换',
+      'zh-Hant': '切換',
+    },
     'env': {
       'en': 'env',
       'zh-Hans': '环境变量',

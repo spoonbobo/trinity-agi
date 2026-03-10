@@ -6,6 +6,7 @@ import '../../core/toast_provider.dart';
 import '../../core/terminal_client.dart';
 import '../../core/providers.dart' show terminalClientProvider, createScopedTerminalClient;
 import '../../main.dart' show authClientProvider;
+import '../terminal/pty_terminal_view.dart';
 import '../terminal/terminal_view.dart';
 
 // ---------------------------------------------------------------------------
@@ -18,8 +19,10 @@ class _ChannelField {
   final String type; // text, number, bool, select, list
   final List<String>? options; // for select type
   final String? hint;
+  final bool sensitive;
 
-  const _ChannelField(this.key, this.label, this.type, {this.options, this.hint});
+  const _ChannelField(this.key, this.label, this.type,
+      {this.options, this.hint, this.sensitive = false});
 }
 
 class _ChannelDef {
@@ -64,7 +67,7 @@ const _knownChannels = <_ChannelDef>[
     _ChannelField('configWrites', 'config writes', 'bool'),
   ], ['channels login --channel whatsapp', 'channels status', 'channels list']),
   _ChannelDef('telegram', 'Telegram', [
-    _ChannelField('botToken', 'bot token', 'text', hint: 'your-bot-token'),
+    _ChannelField('botToken', 'bot token', 'text', hint: 'your-bot-token', sensitive: true),
     _ChannelField('historyLimit', 'history limit', 'number', hint: '50'),
     _ChannelField('replyToMode', 'reply-to mode', 'select', options: ['off', 'first', 'all']),
     _ChannelField('linkPreview', 'link preview', 'bool'),
@@ -73,7 +76,7 @@ const _knownChannels = <_ChannelDef>[
     _ChannelField('configWrites', 'config writes', 'bool'),
   ], ['channels status', 'channels list', 'doctor']),
   _ChannelDef('discord', 'Discord', [
-    _ChannelField('token', 'bot token', 'text', hint: 'your-bot-token'),
+    _ChannelField('token', 'bot token', 'text', hint: 'your-bot-token', sensitive: true),
     _ChannelField('historyLimit', 'history limit', 'number', hint: '20'),
     _ChannelField('replyToMode', 'reply-to mode', 'select', options: ['off', 'first', 'all']),
     _ChannelField('streaming', 'streaming', 'select', options: ['off', 'partial', 'block', 'progress']),
@@ -84,8 +87,8 @@ const _knownChannels = <_ChannelDef>[
     _ChannelField('configWrites', 'config writes', 'bool'),
   ], ['channels status', 'channels list', 'doctor']),
   _ChannelDef('slack', 'Slack', [
-    _ChannelField('botToken', 'bot token', 'text', hint: 'xoxb-...'),
-    _ChannelField('appToken', 'app token', 'text', hint: 'xapp-...'),
+    _ChannelField('botToken', 'bot token', 'text', hint: 'xoxb-...', sensitive: true),
+    _ChannelField('appToken', 'app token', 'text', hint: 'xapp-...', sensitive: true),
     _ChannelField('historyLimit', 'history limit', 'number', hint: '50'),
     _ChannelField('replyToMode', 'reply-to mode', 'select', options: ['off', 'first', 'all']),
     _ChannelField('streaming', 'streaming', 'select', options: ['off', 'partial', 'block', 'progress']),
@@ -117,7 +120,7 @@ const _knownChannels = <_ChannelDef>[
     _ChannelField('tls', 'TLS', 'bool'),
     _ChannelField('nick', 'nick', 'text', hint: 'openclaw-bot'),
     _ChannelField('nickserv.enabled', 'NickServ enabled', 'bool'),
-    _ChannelField('nickserv.password', 'NickServ password', 'text', hint: 'password'),
+    _ChannelField('nickserv.password', 'NickServ password', 'text', hint: 'password', sensitive: true),
     _ChannelField('configWrites', 'config writes', 'bool'),
   ], ['channels status', 'channels list', 'doctor']),
   _ChannelDef('imessage', 'iMessage', [
@@ -131,7 +134,7 @@ const _knownChannels = <_ChannelDef>[
   ], ['channels status', 'channels list', 'doctor']),
   _ChannelDef('bluebubbles', 'BlueBubbles', [
     _ChannelField('serverUrl', 'server URL', 'text', hint: 'http://192.168.1.100:1234'),
-    _ChannelField('password', 'password', 'text', hint: 'api-password'),
+    _ChannelField('password', 'password', 'text', hint: 'api-password', sensitive: true),
     _ChannelField('webhookPath', 'webhook path', 'text', hint: '/bluebubbles-webhook'),
     _ChannelField('sendReadReceipts', 'send read receipts', 'bool'),
     _ChannelField('blockStreaming', 'block streaming', 'bool'),
@@ -141,7 +144,7 @@ const _knownChannels = <_ChannelDef>[
     _ChannelField('configWrites', 'config writes', 'bool'),
   ], ['plugins install @openclaw/msteams', 'channels status', 'channels list']),
   _ChannelDef('mattermost', 'Mattermost', [
-    _ChannelField('botToken', 'bot token', 'text', hint: 'mm-token'),
+    _ChannelField('botToken', 'bot token', 'text', hint: 'mm-token', sensitive: true),
     _ChannelField('baseUrl', 'base URL', 'text', hint: 'https://chat.example.com'),
     _ChannelField('chatmode', 'chat mode', 'select', options: ['oncall', 'onmessage', 'onchar']),
     _ChannelField('textChunkLimit', 'text chunk limit', 'number', hint: '4000'),
@@ -156,12 +159,27 @@ const _knownChannels = <_ChannelDef>[
 
 enum _DetailView { config, terminal }
 
+enum ChannelSetupView { config, interactive }
+
 // ---------------------------------------------------------------------------
 // Widget
 // ---------------------------------------------------------------------------
 
 class AdminChannelsTab extends ConsumerStatefulWidget {
-  const AdminChannelsTab({super.key});
+  final String? initialChannelId;
+  final ChannelSetupView initialView;
+  final String? initialInteractiveCommand;
+  final bool showOnlyFocusedChannel;
+  final bool enableInteractiveTerminal;
+
+  const AdminChannelsTab({
+    super.key,
+    this.initialChannelId,
+    this.initialView = ChannelSetupView.config,
+    this.initialInteractiveCommand,
+    this.showOnlyFocusedChannel = false,
+    this.enableInteractiveTerminal = false,
+  });
 
   @override
   ConsumerState<AdminChannelsTab> createState() => _AdminChannelsTabState();
@@ -192,7 +210,17 @@ class _AdminChannelsTabState extends ConsumerState<AdminChannelsTab> {
   @override
   void initState() {
     super.initState();
+    _applyWidgetFocus(widget);
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  @override
+  void didUpdateWidget(covariant AdminChannelsTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialChannelId != widget.initialChannelId ||
+        oldWidget.initialView != widget.initialView) {
+      _applyWidgetFocus(widget);
+    }
   }
 
   @override
@@ -213,6 +241,22 @@ class _AdminChannelsTabState extends ConsumerState<AdminChannelsTab> {
     _scopedTerminalClient?.dispose();
     _scopedTerminalClient = null;
     _scopedTerminalChannelId = null;
+  }
+
+  void _applyWidgetFocus(AdminChannelsTab widget) {
+    if (widget.initialChannelId == null || widget.initialChannelId!.isEmpty) {
+      return;
+    }
+    _expandedChannel = widget.initialChannelId;
+    final canShowTerminal = widget.enableInteractiveTerminal;
+    _detailView = canShowTerminal && widget.initialView == ChannelSetupView.interactive
+        ? _DetailView.terminal
+        : _DetailView.config;
+    if (canShowTerminal && _detailView == _DetailView.terminal) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _ensureScopedTerminal(widget.initialChannelId!);
+      });
+    }
   }
 
   Future<void> _ensureScopedTerminal(String channelId) async {
@@ -371,6 +415,28 @@ class _AdminChannelsTabState extends ConsumerState<AdminChannelsTab> {
     return value.toString();
   }
 
+  String _displayFieldValue(_ChannelField field, dynamic value) {
+    if (value == null) return '--';
+    if (!field.sensitive) return _displayValue(value);
+    final raw = _displayValue(value);
+    if (raw == '--' || raw.isEmpty) return raw;
+    return '${'*' * (raw.length.clamp(6, 24))}';
+  }
+
+  bool _usesInteractiveShell(String channelId) {
+    return _getSetupCommands(channelId)
+        .any((command) => command.startsWith('channels login'));
+  }
+
+  List<String> _getShellSetupCommands(String channelId) {
+    return _getSetupCommands(channelId).map((command) {
+      if (command.startsWith('openclaw ') || command.startsWith('clawhub ')) {
+        return command;
+      }
+      return 'openclaw $command';
+    }).toList();
+  }
+
   void _startEditField(String configPath, _ChannelField field, dynamic currentValue) {
     final editKey = '$configPath:${field.key}';
     String textValue;
@@ -384,6 +450,9 @@ class _AdminChannelsTabState extends ConsumerState<AdminChannelsTab> {
       textValue = currentValue?.toString() ?? '';
     } else {
       textValue = currentValue?.toString() ?? '';
+    }
+    if (field.sensitive) {
+      textValue = '';
     }
 
     setState(() {
@@ -404,6 +473,13 @@ class _AdminChannelsTabState extends ConsumerState<AdminChannelsTab> {
 
   Future<void> _saveField(String configPath, _ChannelField field) async {
     final raw = _fieldController.text.trim();
+    if (field.sensitive && raw.isEmpty) {
+      _cancelEdit();
+      if (mounted) {
+        ToastService.showInfo(context, 'enter a new value to update ${field.label}');
+      }
+      return;
+    }
     String value;
 
     if (field.type == 'list') {
@@ -480,6 +556,11 @@ class _AdminChannelsTabState extends ConsumerState<AdminChannelsTab> {
   // ---------------------------------------------------------------------------
 
   List<String> _getChannelIds() {
+    if (widget.showOnlyFocusedChannel &&
+        widget.initialChannelId != null &&
+        widget.initialChannelId!.isNotEmpty) {
+      return [widget.initialChannelId!];
+    }
     final knownIds = _knownChannels.map((c) => c.id).toSet();
     final configIds = _channelsConfig.keys.toSet();
     final allIds = <String>[...knownIds];
@@ -592,7 +673,7 @@ class _AdminChannelsTabState extends ConsumerState<AdminChannelsTab> {
           ),
           child: Text(
             'channel config is written to openclaw.json via "config set". '
-            'use the terminal view for interactive onboarding (QR codes, token setup).',
+            'use copilot setup for interactive onboarding (QR codes, token setup).',
             style: theme.textTheme.labelSmall
                 ?.copyWith(color: t.fgTertiary, fontSize: 10),
           ),
@@ -822,8 +903,10 @@ class _AdminChannelsTabState extends ConsumerState<AdminChannelsTab> {
             child: Row(
               children: [
                 _detailToggle('config', _DetailView.config, t, theme),
-                const SizedBox(width: 12),
-                _detailToggle('terminal', _DetailView.terminal, t, theme),
+                if (widget.enableInteractiveTerminal) ...[
+                  const SizedBox(width: 12),
+                  _detailToggle('terminal', _DetailView.terminal, t, theme),
+                ],
                 const Spacer(),
                 Text(
                   def?.label ?? channelId,
@@ -833,7 +916,7 @@ class _AdminChannelsTabState extends ConsumerState<AdminChannelsTab> {
             ),
           ),
           // Sub-view content
-          if (_detailView == _DetailView.config)
+          if (!widget.enableInteractiveTerminal || _detailView == _DetailView.config)
             _buildConfigView(channelId, channelConfig, def, t, theme)
           else
             _buildTerminalView(channelId, t, theme),
@@ -846,6 +929,9 @@ class _AdminChannelsTabState extends ConsumerState<AdminChannelsTab> {
     final isActive = _detailView == view;
     return GestureDetector(
       onTap: () {
+        if (view == _DetailView.terminal && !widget.enableInteractiveTerminal) {
+          return;
+        }
         if (view == _DetailView.terminal) {
           _ensureScopedTerminal(_expandedChannel ?? '');
         }
@@ -1139,6 +1225,20 @@ class _AdminChannelsTabState extends ConsumerState<AdminChannelsTab> {
       );
     }
 
+    if (_usesInteractiveShell(channelId)) {
+      return SizedBox(
+        height: 320,
+        child: PtyTerminalView(
+          client: client,
+          initialCommand: widget.initialChannelId == channelId &&
+                  widget.initialView == ChannelSetupView.interactive
+              ? widget.initialInteractiveCommand
+              : null,
+          suggestedCommands: _getShellSetupCommands(channelId),
+        ),
+      );
+    }
+
     return SizedBox(
       height: 280,
       child: TerminalView(
@@ -1219,7 +1319,7 @@ class _AdminChannelsTabState extends ConsumerState<AdminChannelsTab> {
                       ],
                     )
                   : Text(
-                      _displayValue(currentValue),
+                      _displayFieldValue(field, currentValue),
                       style: valueStyle?.copyWith(
                         color: currentValue != null ? t.fgPrimary : t.fgPlaceholder,
                       ),
@@ -1320,6 +1420,7 @@ class _AdminChannelsTabState extends ConsumerState<AdminChannelsTab> {
             child: TextField(
               controller: _fieldController,
               focusNode: _fieldFocus,
+              obscureText: field.sensitive,
               style: inputStyle,
               keyboardType: field.type == 'number'
                   ? TextInputType.number

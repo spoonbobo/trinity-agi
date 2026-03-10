@@ -21,6 +21,14 @@ class CanvasPanel extends ConsumerStatefulWidget {
 }
 
 class _CanvasPanelState extends ConsumerState<CanvasPanel> {
+  void _showLoadXmlDialog() {
+    DialogService.instance.showUnique(
+      context: context,
+      id: 'drawio-load-xml',
+      builder: (_) => const _DrawIOLoadDialog(),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final mode = ref.watch(canvasModeProvider);
@@ -101,6 +109,45 @@ class _CanvasPanelState extends ConsumerState<CanvasPanel> {
                     onTap: () => CanvasPanel.drawioKey.currentState?.exportPng(),
                     tokens: t,
                   ),
+                  const SizedBox(width: 2),
+                  _SmallTextButton(
+                    label: 'save xml',
+                    tooltip: 'save xml snapshot',
+                    onTap: () async {
+                      final state = CanvasPanel.drawioKey.currentState;
+                      if (state == null) {
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('drawio not ready (state unavailable)'),
+                            duration: Duration(milliseconds: 1600),
+                          ),
+                        );
+                        return;
+                      }
+
+                      final ok = await state.saveXmlSnapshot();
+                      if (!mounted) return;
+                      final messenger = ScaffoldMessenger.of(context);
+                      final details = state.lastSaveError ?? state.debugStatus;
+                      messenger.showSnackBar(
+                        SnackBar(
+                          content: Text(ok
+                              ? 'saved XML snapshot'
+                              : 'unable to save XML snapshot ($details)'),
+                          duration: const Duration(milliseconds: 2200),
+                        ),
+                      );
+                    },
+                    tokens: t,
+                  ),
+                  const SizedBox(width: 2),
+                  _SmallTextButton(
+                    label: 'load xml',
+                    tooltip: 'load xml snapshot',
+                    onTap: _showLoadXmlDialog,
+                    tokens: t,
+                  ),
                 ],
               ),
             ),
@@ -162,6 +209,181 @@ class _CanvasPanelState extends ConsumerState<CanvasPanel> {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _DrawIOLoadDialog extends StatefulWidget {
+  const _DrawIOLoadDialog();
+
+  @override
+  State<_DrawIOLoadDialog> createState() => _DrawIOLoadDialogState();
+}
+
+class _DrawIOLoadDialogState extends State<_DrawIOLoadDialog> {
+  late List<DrawIOSnapshot> _snapshots;
+
+  @override
+  void initState() {
+    super.initState();
+    _snapshots = DrawIOSnapshotStore.list();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = ShellTokens.of(context);
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: kShellBorderRadius),
+      backgroundColor: t.surfaceBase,
+      child: Container(
+        width: 420,
+        constraints: const BoxConstraints(maxHeight: 420),
+        decoration: BoxDecoration(
+          borderRadius: kShellBorderRadius,
+          border: Border.all(color: t.border, width: 0.5),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              height: 36,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: t.border, width: 0.5)),
+              ),
+              child: Row(
+                children: [
+                  Text(
+                    'load drawio snapshot',
+                    style: TextStyle(fontSize: 11, color: t.fgMuted),
+                  ),
+                  const Spacer(),
+                  GestureDetector(
+                    onTap: () => Navigator.of(context).pop(),
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.click,
+                      child: Icon(Icons.close, size: 12, color: t.fgMuted),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (_snapshots.isEmpty)
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: Text(
+                  'no saved snapshots yet',
+                  style: TextStyle(fontSize: 11, color: t.fgMuted),
+                ),
+              )
+            else
+              Flexible(
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: _snapshots.length,
+                  separatorBuilder: (_, __) => Divider(height: 1, color: t.border),
+                  itemBuilder: (context, index) {
+                    final snap = _snapshots[index];
+                    final ts = _formatTimestamp(snap.createdAt);
+                    return _SnapshotRow(
+                      snapshot: snap,
+                      subtitle: ts,
+                      onLoad: () {
+                        CanvasPanel.drawioKey.currentState?.loadXmlSnapshot(snap.xml);
+                        Navigator.of(context).pop();
+                      },
+                      onDelete: () {
+                        DrawIOSnapshotStore.deleteById(snap.id);
+                        setState(() => _snapshots = DrawIOSnapshotStore.list());
+                      },
+                      tokens: t,
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatTimestamp(DateTime dt) {
+    final yyyy = dt.year.toString().padLeft(4, '0');
+    final mm = dt.month.toString().padLeft(2, '0');
+    final dd = dt.day.toString().padLeft(2, '0');
+    final hh = dt.hour.toString().padLeft(2, '0');
+    final min = dt.minute.toString().padLeft(2, '0');
+    final sec = dt.second.toString().padLeft(2, '0');
+    return '$yyyy-$mm-$dd $hh:$min:$sec';
+  }
+}
+
+class _SnapshotRow extends StatefulWidget {
+  final DrawIOSnapshot snapshot;
+  final String subtitle;
+  final VoidCallback onLoad;
+  final VoidCallback onDelete;
+  final ShellTokens tokens;
+
+  const _SnapshotRow({
+    required this.snapshot,
+    required this.subtitle,
+    required this.onLoad,
+    required this.onDelete,
+    required this.tokens,
+  });
+
+  @override
+  State<_SnapshotRow> createState() => _SnapshotRowState();
+}
+
+class _SnapshotRowState extends State<_SnapshotRow> {
+  bool _hovering = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = widget.tokens;
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovering = true),
+      onExit: (_) => setState(() => _hovering = false),
+      child: GestureDetector(
+        onTap: widget.onLoad,
+        child: Container(
+          height: 42,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          color: _hovering ? t.surfaceCard : Colors.transparent,
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      widget.snapshot.name,
+                      style: TextStyle(fontSize: 11, color: t.fgSecondary),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    Text(
+                      widget.subtitle,
+                      style: TextStyle(fontSize: 9, color: t.fgMuted),
+                    ),
+                  ],
+                ),
+              ),
+              if (_hovering)
+                GestureDetector(
+                  onTap: widget.onDelete,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: Icon(Icons.delete_outline, size: 12, color: t.fgMuted),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -328,6 +550,50 @@ class _SmallButton extends StatelessWidget {
               border: Border.all(color: tokens.border, width: 0.5),
             ),
             child: Icon(icon, size: 12, color: tokens.fgMuted),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SmallTextButton extends StatelessWidget {
+  final String label;
+  final String tooltip;
+  final VoidCallback onTap;
+  final ShellTokens tokens;
+
+  const _SmallTextButton({
+    required this.label,
+    required this.tooltip,
+    required this.onTap,
+    required this.tokens,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      waitDuration: const Duration(milliseconds: 400),
+      child: GestureDetector(
+        onTap: onTap,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            decoration: BoxDecoration(
+              borderRadius: kShellBorderRadiusSm,
+              color: tokens.surfaceBase.withOpacity(0.9),
+              border: Border.all(color: tokens.border, width: 0.5),
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 10,
+                color: tokens.fgMuted,
+                letterSpacing: 0.2,
+              ),
+            ),
           ),
         ),
       ),

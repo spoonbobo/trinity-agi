@@ -22,7 +22,7 @@ END;
 $$;
 
 -- Roles with hierarchy support
-CREATE TABLE rbac.roles (
+CREATE TABLE IF NOT EXISTS rbac.roles (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name        TEXT UNIQUE NOT NULL,
   parent_id   UUID REFERENCES rbac.roles(id) ON DELETE SET NULL,
@@ -31,7 +31,7 @@ CREATE TABLE rbac.roles (
 );
 
 -- Fine-grained permission actions
-CREATE TABLE rbac.permissions (
+CREATE TABLE IF NOT EXISTS rbac.permissions (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   action      TEXT UNIQUE NOT NULL,
   description TEXT,
@@ -39,14 +39,14 @@ CREATE TABLE rbac.permissions (
 );
 
 -- Role <-> Permission mapping
-CREATE TABLE rbac.role_permissions (
+CREATE TABLE IF NOT EXISTS rbac.role_permissions (
   role_id       UUID NOT NULL REFERENCES rbac.roles(id) ON DELETE CASCADE,
   permission_id UUID NOT NULL REFERENCES rbac.permissions(id) ON DELETE CASCADE,
   PRIMARY KEY (role_id, permission_id)
 );
 
 -- User <-> Role mapping (references GoTrue auth.users)
-CREATE TABLE rbac.user_roles (
+CREATE TABLE IF NOT EXISTS rbac.user_roles (
   user_id   UUID NOT NULL,
   role_id   UUID NOT NULL REFERENCES rbac.roles(id) ON DELETE CASCADE,
   granted_by UUID,
@@ -58,20 +58,30 @@ CREATE TABLE rbac.user_roles (
 CREATE INDEX IF NOT EXISTS idx_roles_parent_id ON rbac.roles(parent_id);
 CREATE INDEX IF NOT EXISTS idx_user_roles_role_id ON rbac.user_roles(role_id);
 
--- Audit log
-CREATE TABLE rbac.audit_log (
-  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     UUID,
-  action      TEXT NOT NULL,
-  resource    TEXT,
-  metadata    JSONB DEFAULT '{}',
-  ip          TEXT,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+-- Audit log (may already be partitioned by migration 006)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'rbac' AND c.relname = 'audit_log'
+  ) THEN
+    CREATE TABLE rbac.audit_log (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id     UUID,
+      action      TEXT NOT NULL,
+      resource    TEXT,
+      metadata    JSONB DEFAULT '{}',
+      ip          TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  END IF;
+END;
+$$;
 
-CREATE INDEX idx_audit_log_user ON rbac.audit_log(user_id);
-CREATE INDEX idx_audit_log_action ON rbac.audit_log(action);
-CREATE INDEX idx_audit_log_created ON rbac.audit_log(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_log_user ON rbac.audit_log(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_action ON rbac.audit_log(action);
+CREATE INDEX IF NOT EXISTS idx_audit_log_created ON rbac.audit_log(created_at DESC);
 
 -- Recursive CTE function: resolve all effective permissions for a user
 CREATE OR REPLACE FUNCTION rbac.effective_permissions(p_user_id UUID)

@@ -1,26 +1,65 @@
 import 'dart:convert';
 import 'dart:html' as html;
 
+class CopilotAction {
+  final String type;
+  final String label;
+  final String? channelId;
+  final String? focus;
+  final String? filter;
+  final String? command;
+  final bool recommended;
+
+  const CopilotAction({
+    required this.type,
+    required this.label,
+    this.channelId,
+    this.focus,
+    this.filter,
+    this.command,
+    this.recommended = false,
+  });
+
+  factory CopilotAction.fromJson(Map<String, dynamic> json) {
+    return CopilotAction(
+      type: json['type']?.toString() ?? '',
+      label: json['label']?.toString() ?? 'open',
+      channelId: json['channelId']?.toString(),
+      focus: json['focus']?.toString(),
+      filter: json['filter']?.toString(),
+      command: json['command']?.toString(),
+      recommended: json['recommended'] == true,
+    );
+  }
+}
+
 class CopilotMessage {
   final String id;
   final String role;
   final String content;
   final DateTime createdAt;
+  final List<CopilotAction> actions;
 
   const CopilotMessage({
     required this.id,
     required this.role,
     required this.content,
     required this.createdAt,
+    this.actions = const [],
   });
 
   factory CopilotMessage.fromJson(Map<String, dynamic> json) {
+    final rawActions = json['actions'] as List? ?? const [];
     return CopilotMessage(
       id: json['id']?.toString() ?? '',
       role: json['role']?.toString() ?? 'assistant',
       content: json['content']?.toString() ?? '',
       createdAt: DateTime.tryParse(json['createdAt']?.toString() ?? '') ??
           DateTime.now(),
+      actions: rawActions
+          .map((item) =>
+              CopilotAction.fromJson(Map<String, dynamic>.from(item as Map)))
+          .toList(),
     );
   }
 }
@@ -46,10 +85,25 @@ class CopilotMessagesResponse {
   }
 }
 
+class CopilotModelsResponse {
+  final String? current;
+  final List<String> available;
+
+  const CopilotModelsResponse({this.current, required this.available});
+
+  factory CopilotModelsResponse.fromJson(Map<String, dynamic> json) {
+    return CopilotModelsResponse(
+      current: json['current']?.toString(),
+      available: List<String>.from(json['available'] as List? ?? const []),
+    );
+  }
+}
+
 class CopilotStatus {
   final String workspace;
   final String desiredDefaultModel;
   final bool desiredDefaultAvailable;
+  final String? actualModel;
   final Map<String, dynamic> defaults;
   final List<String> connectedProviders;
   final Map<String, dynamic>? user;
@@ -59,6 +113,7 @@ class CopilotStatus {
     required this.workspace,
     required this.desiredDefaultModel,
     required this.desiredDefaultAvailable,
+    this.actualModel,
     required this.defaults,
     required this.connectedProviders,
     this.user,
@@ -70,6 +125,7 @@ class CopilotStatus {
       workspace: json['workspace']?.toString() ?? '',
       desiredDefaultModel: json['desiredDefaultModel']?.toString() ?? '',
       desiredDefaultAvailable: json['desiredDefaultAvailable'] == true,
+      actualModel: json['actualModel']?.toString(),
       defaults: Map<String, dynamic>.from(json['defaults'] as Map? ?? const {}),
       connectedProviders: List<String>.from(json['connectedProviders'] as List? ?? const []),
       user: json['user'] is Map<String, dynamic>
@@ -168,5 +224,33 @@ class CopilotClient {
       openclawId: openclawId,
     );
     return CopilotMessagesResponse.fromJson(response);
+  }
+
+  Future<CopilotModelsResponse> fetchModels(
+    String token, {
+    String? openclawId,
+  }) async {
+    final response = await _request(
+      'GET',
+      '/copilot/models',
+      token,
+      openclawId: openclawId,
+    );
+    return CopilotModelsResponse.fromJson(response);
+  }
+
+  Future<CopilotModelsResponse> setModel(
+    String token,
+    String model, {
+    String? openclawId,
+  }) async {
+    final response = await _request(
+      'POST',
+      '/copilot/model',
+      token,
+      openclawId: openclawId,
+      body: {'model': model},
+    );
+    return CopilotModelsResponse.fromJson(response);
   }
 }
