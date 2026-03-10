@@ -183,6 +183,8 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
   String _currentSession = 'main';
   bool _historyLoading = false; // Guard against concurrent history fetches
   final List<_PendingUserEcho> _pendingUserEchoes = [];
+  bool _disposed = false;
+  gw.GatewayClient? _cachedClient; // Stored at subscribe time to avoid ref after dispose
 
   @override
   void initState() {
@@ -193,6 +195,7 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
   }
 
   void _onScrollPositionChanged() {
+    if (_disposed) return;
     final shouldShow = !_isNearBottom && _entries.isNotEmpty;
     if (shouldShow != _showScrollToBottom) {
       setState(() => _showScrollToBottom = shouldShow);
@@ -200,14 +203,16 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
   }
 
   void _subscribeToChatEvents() {
+    if (_disposed) return;
     _scrollController.addListener(_onScrollPositionChanged);
     final client = ref.read(gatewayClientProvider);
+    _cachedClient = client;
 
     // Listen for user messages sent through the prompt bar
     client.addListener(_onClientChange);
 
     _chatSub = client.chatEvents.listen((event) {
-      _handleChatEvent(event);
+      if (!_disposed) _handleChatEvent(event);
     });
 
     // If the gateway is already connected (e.g. listener registered after
@@ -218,18 +223,20 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
   }
 
   void _onClientChange() {
+    if (_disposed) return;
     // Re-subscribe if reconnected; guard prevents overlapping fetches.
     if (!_historyLoading &&
-        ref.read(gatewayClientProvider).state == gw.ConnectionState.connected) {
+        _cachedClient?.state == gw.ConnectionState.connected) {
       _loadHistory();
     }
   }
 
   Future<void> _loadHistory() async {
-    if (_historyLoading) return; // Prevent concurrent fetches
+    if (_historyLoading || _disposed) return; // Prevent concurrent fetches
     _historyLoading = true;
-    final client = ref.read(gatewayClientProvider);
-    final sessionKey = ref.read(activeSessionProvider);
+    final client = _cachedClient ?? (_disposed ? null : ref.read(gatewayClientProvider));
+    if (client == null) { _historyLoading = false; return; }
+    final sessionKey = _disposed ? _currentSession : ref.read(activeSessionProvider);
     try {
       final response = await client.getChatHistory(sessionKey: sessionKey, limit: 50);
       if (!mounted) { _historyLoading = false; return; } // Widget disposed during async gap
@@ -793,8 +800,9 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
   int? _currentRunFirstAssistantSeq;
 
   Future<void> _pollCanvasSurface() async {
+    if (_disposed) return;
     try {
-      final client = ref.read(gatewayClientProvider);
+      final gw.GatewayClient client = _cachedClient ?? ref.read(gatewayClientProvider);
       final sessionKey = ref.read(activeSessionProvider);
       // Fetch recent history and scan for __A2UI__ in tool results
       final response = await client.getChatHistory(sessionKey: sessionKey, limit: 10);
@@ -853,8 +861,10 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
   }
 
   void _handleA2UIToolResult(String result) {
+    if (_disposed) return;
     final lines = result.split('\n').skip(1);
-    final client = ref.read(gatewayClientProvider);
+    final client = _cachedClient ?? (_disposed ? null : ref.read(gatewayClientProvider));
+    if (client == null) return;
     for (final line in lines) {
       if (line.trim().isEmpty) continue;
       try {
@@ -909,8 +919,9 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
 
   @override
   void dispose() {
+    _disposed = true;
     _chatSub?.cancel();
-    ref.read(gatewayClientProvider).removeListener(_onClientChange);
+    _cachedClient?.removeListener(_onClientChange);
     _scrollController.dispose();
     super.dispose();
   }
