@@ -69,9 +69,9 @@ supabaseAuth:
 keycloak:
   resources:
     limits:
-      memory: 512Mi
+      memory: 768Mi
     requests:
-      memory: 256Mi
+      memory: 384Mi
       cpu: 100m
 
 authService:
