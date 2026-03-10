@@ -20,6 +20,7 @@ dependencies:
   flutter_markdown: ^0.7.6
   pointer_interceptor: ^0.10.1
   xterm: ^4.0.0
+  force_graph: ^0.5.9
 
 dev_dependencies:
   flutter_test:

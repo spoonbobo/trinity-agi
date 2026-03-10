@@ -216,6 +216,18 @@ func (c *Client) CreateOpenClawDeployment(ctx context.Context, oc *db.OpenClaw, 
 					Labels: labels,
 				},
 				Spec: corev1.PodSpec{
+					InitContainers: []corev1.Container{
+						{
+							Name:            "init-openclaw-config",
+							Image:           image,
+							ImagePullPolicy: corev1.PullIfNotPresent,
+							Command:         []string{"/bin/sh", "-lc", "if [ -f /home/node/.openclaw/openclaw.json ] && [ ! -w /home/node/.openclaw/openclaw.json ]; then rm -f /home/node/.openclaw/openclaw.json; fi; if [ ! -f /home/node/.openclaw/openclaw.json ]; then cp /etc/openclaw-config/openclaw.json /home/node/.openclaw/openclaw.json; fi"},
+							VolumeMounts: []corev1.VolumeMount{
+								{Name: "data", MountPath: "/home/node/.openclaw"},
+								{Name: "config", MountPath: "/etc/openclaw-config", ReadOnly: true},
+							},
+						},
+					},
 					Containers: []corev1.Container{
 						{
 							Name:    "openclaw",
@@ -243,7 +255,7 @@ func (c *Client) CreateOpenClawDeployment(ctx context.Context, oc *db.OpenClaw, 
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "data", MountPath: "/home/node/.openclaw"},
-								{Name: "config", MountPath: "/home/node/.openclaw/openclaw.json", SubPath: "openclaw.json", ReadOnly: true},
+								{Name: "config", MountPath: "/etc/openclaw-config", ReadOnly: true},
 								{Name: "shm", MountPath: "/dev/shm"},
 							},
 							LivenessProbe: &corev1.Probe{

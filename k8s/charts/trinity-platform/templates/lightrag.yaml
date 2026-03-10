@@ -1,0 +1,118 @@
+{{- if .Values.lightrag.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lightrag-data
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "lightrag" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- include "trinity.storageClass" . | nindent 2 }}
+  resources:
+    requests:
+      storage: {{ .Values.lightrag.storage }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lightrag
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "lightrag" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  replicas: {{ .Values.lightrag.replicas }}
+  selector:
+    matchLabels:
+      {{- include "trinity.selectorLabels" (dict "component" "lightrag") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "trinity.componentLabels" (dict "component" "lightrag" "Release" .Release "Chart" .Chart) | nindent 8 }}
+      annotations:
+        checksum/lightrag-secrets: {{ printf "%s|%s|%s" .Values.secrets.lightragInternalToken .Values.secrets.lightragLlmApiKey .Values.secrets.lightragEmbeddingApiKey | sha256sum }}
+        checksum/lightrag-config: {{ printf "%s|%s|%s|%v|%v|%s|%s" .Values.lightrag.llmModel .Values.lightrag.llmBaseUrl .Values.lightrag.embeddingModel .Values.lightrag.embeddingDim .Values.lightrag.embeddingMaxTokens .Values.lightrag.defaultQueryMode (.Values.lightrag.enableRerank | quote) | sha256sum }}
+    spec:
+      containers:
+        - name: lightrag
+          image: {{ include "trinity.image" (dict "image" .Values.lightrag.image "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ .Values.lightrag.port }}
+              name: http
+          env:
+            - name: LIGHTRAG_PORT
+              value: {{ .Values.lightrag.port | quote }}
+            - name: LIGHTRAG_DATA_DIR
+              value: "/data"
+            - name: LIGHTRAG_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: LIGHTRAG_INTERNAL_TOKEN
+            - name: LIGHTRAG_LLM_MODEL
+              value: {{ .Values.lightrag.llmModel | quote }}
+            - name: LIGHTRAG_LLM_BASE_URL
+              value: {{ .Values.lightrag.llmBaseUrl | quote }}
+            - name: LIGHTRAG_LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: LIGHTRAG_LLM_API_KEY
+            - name: LIGHTRAG_EMBEDDING_MODEL
+              value: {{ .Values.lightrag.embeddingModel | quote }}
+            - name: LIGHTRAG_EMBEDDING_BASE_URL
+              value: {{ .Values.lightrag.embeddingBaseUrl | quote }}
+            - name: LIGHTRAG_EMBEDDING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: LIGHTRAG_EMBEDDING_API_KEY
+            - name: LIGHTRAG_EMBEDDING_DIM
+              value: {{ .Values.lightrag.embeddingDim | quote }}
+            - name: LIGHTRAG_EMBEDDING_MAX_TOKENS
+              value: {{ .Values.lightrag.embeddingMaxTokens | quote }}
+            - name: LIGHTRAG_DEFAULT_QUERY_MODE
+              value: {{ .Values.lightrag.defaultQueryMode | quote }}
+            - name: LIGHTRAG_ENABLE_RERANK
+              value: {{ .Values.lightrag.enableRerank | quote }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.lightrag.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: lightrag-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lightrag
+  namespace: {{ include "trinity.namespace" . }}
+  labels:
+    {{- include "trinity.componentLabels" (dict "component" "lightrag" "Release" .Release "Chart" .Chart) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.lightrag.port }}
+      targetPort: http
+      name: http
+  selector:
+    {{- include "trinity.selectorLabels" (dict "component" "lightrag") | nindent 4 }}
+{{- end }}

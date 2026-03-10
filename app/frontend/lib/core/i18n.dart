@@ -70,6 +70,11 @@ String tr(AppLanguage language, String key) {
       'zh-Hans': '技能',
       'zh-Hant': '技能',
     },
+    'knowledge': {
+      'en': 'knowledge',
+      'zh-Hans': '知识',
+      'zh-Hant': '知識',
+    },
     'automations': {
       'en': 'automations',
       'zh-Hans': '自动化',

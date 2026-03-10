@@ -277,6 +277,8 @@ services:
       POSTGRES_PASSWORD: ${SUPABASE_POSTGRES_PASSWORD:?Set SUPABASE_POSTGRES_PASSWORD in .env}
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
       SUPERADMIN_ALLOWLIST: ${SUPERADMIN_ALLOWLIST:-}
+      LIGHTRAG_URL: http://lightrag:18803
+      LIGHTRAG_INTERNAL_TOKEN: ${LIGHTRAG_INTERNAL_TOKEN:-}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:18791/auth/health || exit 1"]
       interval: 15s
@@ -379,6 +381,42 @@ services:
     networks:
       - trinity
 
+  # ─── LightRAG Sidecar ──────────────────────────────────────────────────────
+  lightrag:
+    build:
+      context: ./lightrag
+      dockerfile: Dockerfile
+    container_name: trinity-lightrag
+    restart: unless-stopped
+    environment:
+      LIGHTRAG_PORT: 18803
+      LIGHTRAG_DATA_DIR: /data
+      LIGHTRAG_INTERNAL_TOKEN: ${LIGHTRAG_INTERNAL_TOKEN:-}
+      LIGHTRAG_LLM_MODEL: ${LIGHTRAG_LLM_MODEL:-gpt-4o-mini}
+      LIGHTRAG_LLM_API_KEY: ${LIGHTRAG_LLM_API_KEY:-}
+      LIGHTRAG_LLM_BASE_URL: ${LIGHTRAG_LLM_BASE_URL:-}
+      LIGHTRAG_EMBEDDING_MODEL: ${LIGHTRAG_EMBEDDING_MODEL:-text-embedding-3-large}
+      LIGHTRAG_EMBEDDING_API_KEY: ${LIGHTRAG_EMBEDDING_API_KEY:-}
+      LIGHTRAG_EMBEDDING_BASE_URL: ${LIGHTRAG_EMBEDDING_BASE_URL:-}
+      LIGHTRAG_EMBEDDING_DIM: ${LIGHTRAG_EMBEDDING_DIM:-3072}
+      LIGHTRAG_EMBEDDING_MAX_TOKENS: ${LIGHTRAG_EMBEDDING_MAX_TOKENS:-8192}
+      LIGHTRAG_DEFAULT_QUERY_MODE: ${LIGHTRAG_DEFAULT_QUERY_MODE:-hybrid}
+      LIGHTRAG_ENABLE_RERANK: ${LIGHTRAG_ENABLE_RERANK:-true}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+    volumes:
+      - lightrag-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:18803/health >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      auth-service:
+        condition: service_healthy
+    networks:
+      - trinity
+
   # ─── Frontend Builder (profile: build) ─────────────────────────────────
   frontend-builder:
     build:
@@ -439,6 +477,7 @@ volumes:
   grafana-data:
   loki-data:
   terminal-proxy-data:
+  lightrag-data:
 
 networks:
   trinity:

@@ -186,16 +186,23 @@ class GatewayClient extends ChangeNotifier {
   /// Send a chat message to the agent.
   Future<WsResponse> sendChatMessage(String message,
       {String sessionKey = 'main'}) {
+    final idempotencyKey = _uuid.v4();
     if (!_disposed) {
       _eventController.add(WsEvent(
         event: 'chat',
-        payload: {'type': 'message', 'role': 'user', 'content': message},
+        payload: {
+          'type': 'message',
+          'role': 'user',
+          'content': message,
+          'localEcho': true,
+          'idempotencyKey': idempotencyKey,
+        },
       ));
     }
     return sendRequest(GatewayMethods.chatSend, {
       'message': message,
       'sessionKey': sessionKey,
-      'idempotencyKey': _uuid.v4(),
+      'idempotencyKey': idempotencyKey,
     });
   }
 
@@ -251,6 +258,7 @@ class GatewayClient extends ChangeNotifier {
     String sessionKey = 'main',
     List<Map<String, dynamic>>? attachments,
   }) {
+    final idempotencyKey = _uuid.v4();
     if (!_disposed) {
       _eventController.add(WsEvent(
         event: 'chat',
@@ -258,6 +266,8 @@ class GatewayClient extends ChangeNotifier {
           'type': 'message',
           'role': 'user',
           'content': message,
+          'localEcho': true,
+          'idempotencyKey': idempotencyKey,
           if (attachments != null) 'attachments': attachments,
         },
       ));
@@ -265,7 +275,7 @@ class GatewayClient extends ChangeNotifier {
     return sendRequest(GatewayMethods.chatSend, {
       'message': message,
       'sessionKey': sessionKey,
-      'idempotencyKey': _uuid.v4(),
+      'idempotencyKey': idempotencyKey,
       if (attachments != null) 'attachments': attachments,
     });
   }

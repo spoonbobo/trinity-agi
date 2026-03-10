@@ -150,6 +150,7 @@ build_images() {
     "trinity-gateway-proxy:latest|$PROJECT_ROOT/app/gateway-proxy|$PROJECT_ROOT/app/gateway-proxy/Dockerfile"
     "trinity-terminal-proxy:latest|$PROJECT_ROOT/app/terminal-proxy|$PROJECT_ROOT/app/terminal-proxy/Dockerfile"
     "trinity-copilot:latest|$PROJECT_ROOT|$PROJECT_ROOT/app/copilot/Dockerfile"
+    "trinity-lightrag:latest|$PROJECT_ROOT/app/lightrag|$PROJECT_ROOT/app/lightrag/Dockerfile"
     "trinity-frontend:latest|$PROJECT_ROOT/app/frontend|$PROJECT_ROOT/app/frontend/Dockerfile"
     "trinity-site:latest|$PROJECT_ROOT/site|$PROJECT_ROOT/site/Dockerfile"
   )

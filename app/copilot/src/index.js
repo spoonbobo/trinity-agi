@@ -80,9 +80,9 @@ function buildContext(user, selectedOpenClaw, openclawReachable) {
     );
     if (openclawReachable) {
       lines.push(
-        "The user has an interactive PTY terminal side-by-side with this chat.",
+        "The user has an interactive terminal available.",
         "Do not claim you executed commands unless the user pasted command output.",
-        "Prefer giving exact `openclaw ...` commands for the user to run in PTY.",
+        "Prefer giving exact `openclaw ...` commands for the user to run in terminal.",
         "Do not suggest kubectl for normal user workflows.",
         "Only mention kubectl if the user explicitly asks for Kubernetes/cluster operations.",
         "Available openclaw CLI commands:",
@@ -657,7 +657,7 @@ app.post("/openclaw/exec", async (req, res) => {
   res.status(410).json({
     error: "endpoint disabled",
     message:
-      "Run commands in the side-by-side PTY terminal and paste output here for analysis.",
+      "Run commands in terminal and paste output here for analysis.",
   });
 });
 

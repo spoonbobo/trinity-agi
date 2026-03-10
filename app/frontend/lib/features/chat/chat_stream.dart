@@ -75,6 +75,19 @@ class ChatEntry {
     return null;
   }
 
+  /// Parse tool args from either a JSON string or structured object.
+  static Map<String, dynamic>? parseToolMetadataDynamic(String? toolName, dynamic args) {
+    if (args == null) return null;
+    if (args is Map<String, dynamic>) return args;
+    if (args is Map) {
+      return args.map((k, v) => MapEntry('$k', v));
+    }
+    if (args is String) {
+      return parseToolMetadata(toolName, args);
+    }
+    return null;
+  }
+
   /// Human-readable summary of tool metadata for display.
   /// Returns a short description line (e.g. "ls -la" for exec, "src/main.dart" for read).
   String? get metadataSummary {
@@ -169,6 +182,7 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
   bool _showScrollToBottom = false;
   String _currentSession = 'main';
   bool _historyLoading = false; // Guard against concurrent history fetches
+  final List<_PendingUserEcho> _pendingUserEchoes = [];
 
   @override
   void initState() {
@@ -473,7 +487,9 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
       final type = payload['type'] as String?;
 
       if (type == 'message' && payload['role'] == 'user') {
+        final isLocalEcho = payload['localEcho'] == true;
         final content = payload['content'] as String? ?? '';
+        final idempotencyKey = payload['idempotencyKey'] as String?;
         final rawAttachments = payload['attachments'];
         List<Map<String, dynamic>>? attachments;
         if (rawAttachments is List) {
@@ -481,7 +497,20 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
               .whereType<Map<String, dynamic>>()
               .toList();
         }
+
+        if (isLocalEcho) {
+          _recordOptimisticUser(content, idempotencyKey: idempotencyKey);
+        } else if (_consumeOptimisticUser(content, idempotencyKey: idempotencyKey)) {
+          return;
+        }
+
         setState(() {
+          if (!isLocalEcho &&
+              _entries.isNotEmpty &&
+              _entries.last.role == 'user' &&
+              _entries.last.content == content) {
+            return;
+          }
           _entries.add(ChatEntry(
             role: 'user',
             content: content,
@@ -491,6 +520,7 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
       } else if (state == 'delta' || state == 'final' || state == 'aborted') {
         final message = payload['message'];
         if (message is! Map<String, dynamic>) return;
+        final assistantStreamKey = _assistantStreamKey(payload, message);
         final contentList = message['content'];
         if (contentList is! List || contentList.isEmpty) return;
         // Scan for the first 'text' block instead of blindly taking
@@ -503,29 +533,54 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
           }
         }
         if (state == 'final' || state == 'aborted') {
+          final keyedIdx = assistantStreamKey == null
+              ? -1
+              : _findAssistantIndexByStreamKey(assistantStreamKey);
+          final streamingIdx = keyedIdx != -1
+              ? keyedIdx
+              : _entries.lastIndexWhere(
+                  (e) => e.role == 'assistant' && e.isStreaming,
+                );
           setState(() {
             _agentThinking = false;
-            if (_entries.isNotEmpty && _entries.last.role == 'assistant') {
+            if (streamingIdx != -1) {
               if (text.isEmpty) {
                 // Remove the streaming placeholder -- it was a tool-only turn
-                _entries.removeLast();
+                _entries.removeAt(streamingIdx);
               } else {
-                _entries[_entries.length - 1] = _entries.last.copyWith(
+                _entries[streamingIdx] = _entries[streamingIdx].copyWith(
                   content: text,
                   isStreaming: false,
                 );
               }
             } else if (text.isNotEmpty) {
+              final lastAssistantIdx = _entries.lastIndexWhere((e) => e.role == 'assistant');
+              if (lastAssistantIdx != -1 &&
+                  !_entries[lastAssistantIdx].isStreaming &&
+                  _entries[lastAssistantIdx].content == text) {
+                return;
+              }
               _entries.add(ChatEntry(role: 'assistant', content: text));
             }
           });
         } else {
+          final keyedStreamingIdx = assistantStreamKey == null
+              ? -1
+              : _findAssistantIndexByStreamKey(assistantStreamKey, requireStreaming: true);
+          final keyedIdx = assistantStreamKey == null
+              ? -1
+              : _findAssistantIndexByStreamKey(assistantStreamKey);
+          final streamingIdx = keyedStreamingIdx != -1
+              ? keyedStreamingIdx
+              : (keyedIdx != -1
+                  ? keyedIdx
+                  : _entries.lastIndexWhere(
+                      (e) => e.role == 'assistant' && e.isStreaming,
+                    ));
           setState(() {
             _agentThinking = false;
-            if (_entries.isNotEmpty &&
-                _entries.last.role == 'assistant' &&
-                _entries.last.isStreaming) {
-              _entries[_entries.length - 1] = _entries.last.copyWith(
+            if (streamingIdx != -1) {
+              _entries[streamingIdx] = _entries[streamingIdx].copyWith(
                 content: text,
                 isStreaming: true,
               );
@@ -536,6 +591,9 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
                 role: 'assistant',
                 content: text,
                 isStreaming: true,
+                metadata: assistantStreamKey == null
+                    ? null
+                    : {'_streamKey': assistantStreamKey},
               ));
             }
           });
@@ -567,10 +625,11 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
         } else if (phase == 'end') {
           setState(() {
             _agentThinking = false;
-            // Clear isStreaming on all entries still marked as streaming
-            // (assistant deltas and tool cards that never received a result).
+            // Clear stale streaming state for tool cards only.
+            // Keep assistant streaming entry intact so a later chat.final
+            // can replace it instead of appending a second assistant bubble.
             for (int i = _entries.length - 1; i >= 0; i--) {
-              if (_entries[i].isStreaming) {
+              if (_entries[i].isStreaming && _entries[i].role == 'tool') {
                 _entries[i] = _entries[i].copyWith(isStreaming: false);
               }
               if (_entries[i].role == 'user') break;
@@ -618,13 +677,14 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
           }
         } else {
           // Tool started or in progress
-          final args = dataMap?['args']?.toString() ?? '';
-          final meta = ChatEntry.parseToolMetadata(toolName, args);
+          final argsRaw = dataMap?['args'];
+          final argsText = argsRaw?.toString() ?? '';
+          final meta = ChatEntry.parseToolMetadataDynamic(toolName, argsRaw);
           setState(() {
             _agentThinking = false; // Clear thinking indicator -- tool card replaces it
             _entries.add(ChatEntry(
               role: 'tool',
-              content: args,
+              content: argsText,
               toolName: toolName,
               toolCallId: toolCallId,
               isStreaming: true,
@@ -652,6 +712,73 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
         }
       }
     }
+  }
+
+  void _recordOptimisticUser(String content, {String? idempotencyKey}) {
+    final now = DateTime.now();
+    _pendingUserEchoes.add(_PendingUserEcho(
+      content: content,
+      idempotencyKey: idempotencyKey,
+      createdAt: now,
+    ));
+    _pendingUserEchoes.removeWhere(
+      (entry) => now.difference(entry.createdAt).inSeconds > 20,
+    );
+  }
+
+  bool _consumeOptimisticUser(String content, {String? idempotencyKey}) {
+    final now = DateTime.now();
+    _pendingUserEchoes.removeWhere(
+      (entry) => now.difference(entry.createdAt).inSeconds > 20,
+    );
+
+    for (int i = 0; i < _pendingUserEchoes.length; i++) {
+      final pending = _pendingUserEchoes[i];
+      final sameId = idempotencyKey != null &&
+          pending.idempotencyKey != null &&
+          pending.idempotencyKey == idempotencyKey;
+      final sameContent = pending.content == content;
+      if (sameId || sameContent) {
+        _pendingUserEchoes.removeAt(i);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  String? _assistantStreamKey(
+    Map<String, dynamic> payload,
+    Map<String, dynamic> message,
+  ) {
+    final candidates = [
+      message['id'],
+      message['messageId'],
+      payload['messageId'],
+      payload['id'],
+      payload['runId'],
+      message['runId'],
+      payload['turnId'],
+      message['turnId'],
+    ];
+    for (final candidate in candidates) {
+      final value = candidate?.toString();
+      if (value != null && value.isNotEmpty) return value;
+    }
+    return null;
+  }
+
+  int _findAssistantIndexByStreamKey(
+    String streamKey, {
+    bool requireStreaming = false,
+  }) {
+    for (int i = _entries.length - 1; i >= 0; i--) {
+      final entry = _entries[i];
+      if (entry.role != 'assistant') continue;
+      if (requireStreaming && !entry.isStreaming) continue;
+      final key = entry.metadata?['_streamKey']?.toString();
+      if (key == streamKey) return i;
+    }
+    return -1;
   }
 
   String? _lastCanvasSurface;
@@ -918,6 +1045,18 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
       ),
     );
   }
+}
+
+class _PendingUserEcho {
+  final String content;
+  final String? idempotencyKey;
+  final DateTime createdAt;
+
+  const _PendingUserEcho({
+    required this.content,
+    required this.idempotencyKey,
+    required this.createdAt,
+  });
 }
 
 class _UserBubble extends StatefulWidget {
@@ -1507,7 +1646,7 @@ class _ToolCardState extends State<_ToolCard> {
               children: [
                 if (isStreaming) ...[
                   SizedBox(
-                    width: 12,
+                    width: 22,
                     height: 8,
                     child: const _StreamingIndicator(),
                   ),

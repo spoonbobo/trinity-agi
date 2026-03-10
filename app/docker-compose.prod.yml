@@ -56,3 +56,10 @@ services:
   auth-service:
     environment:
       ENABLE_DEFAULT_SUPERADMIN: "false"
+
+  # ─── LightRAG: production sidecar limits ──────────────────────────────────
+  lightrag:
+    deploy:
+      resources:
+        limits:
+          memory: 1G

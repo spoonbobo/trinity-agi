@@ -88,6 +88,13 @@ spec:
                 secretKeyRef:
                   name: trinity-secrets
                   key: ORCHESTRATOR_SERVICE_TOKEN
+            - name: LIGHTRAG_URL
+              value: "http://lightrag:{{ .Values.lightrag.port }}"
+            - name: LIGHTRAG_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: LIGHTRAG_INTERNAL_TOKEN
           livenessProbe:
             httpGet:
               path: /auth/health

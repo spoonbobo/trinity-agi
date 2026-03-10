@@ -9,6 +9,7 @@ import 'a2ui_renderer.dart';
 import 'drawio_renderer.dart';
 import 'browser_renderer.dart';
 import 'browser_provider.dart';
+import '../../main.dart' show authClientProvider;
 
 /// Unified canvas panel: A2UI | DrawIO | Browser.
 /// Mode toggle and mode-specific toolbars fixed at bottom-right.
@@ -335,20 +336,73 @@ class _DrawIOSaveAsDialogState extends State<_DrawIOSaveAsDialog> {
   }
 }
 
-class _DrawIOLoadDialog extends StatefulWidget {
+class _DrawIOLoadDialog extends ConsumerStatefulWidget {
   const _DrawIOLoadDialog();
 
   @override
-  State<_DrawIOLoadDialog> createState() => _DrawIOLoadDialogState();
+  ConsumerState<_DrawIOLoadDialog> createState() => _DrawIOLoadDialogState();
 }
 
-class _DrawIOLoadDialogState extends State<_DrawIOLoadDialog> {
-  late List<DrawIOSnapshot> _snapshots;
+class _DrawIOLoadDialogState extends ConsumerState<_DrawIOLoadDialog> {
+  List<DrawIOSnapshot> _snapshots = const [];
+  bool _loading = true;
+  String? _error;
 
   @override
   void initState() {
     super.initState();
-    _snapshots = DrawIOSnapshotStore.list();
+    _loadSnapshots();
+  }
+
+  Future<void> _loadSnapshots() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final authState = ref.read(authClientProvider).state;
+      final token = authState.token;
+      final openclawId = authState.activeOpenClawId;
+      if (token == null || token.isEmpty || openclawId == null || openclawId.isEmpty) {
+        throw StateError('missing auth/openclaw context');
+      }
+      final snapshots = await DrawIOSnapshotStore.list(
+        token: token,
+        openclawId: openclawId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _snapshots = snapshots;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.toString());
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  Future<void> _deleteSnapshot(String id) async {
+    try {
+      final authState = ref.read(authClientProvider).state;
+      final token = authState.token;
+      final openclawId = authState.activeOpenClawId;
+      if (token == null || token.isEmpty || openclawId == null || openclawId.isEmpty) {
+        throw StateError('missing auth/openclaw context');
+      }
+      final snapshots = await DrawIOSnapshotStore.deleteById(
+        token: token,
+        openclawId: openclawId,
+        id: id,
+      );
+      if (!mounted) return;
+      setState(() => _snapshots = snapshots);
+    } catch (e) {
+      if (!mounted) return;
+      ToastService.showError(context, 'failed to delete snapshot: $e');
+    }
   }
 
   @override
@@ -390,7 +444,23 @@ class _DrawIOLoadDialogState extends State<_DrawIOLoadDialog> {
                 ],
               ),
             ),
-            if (_snapshots.isEmpty)
+            if (_loading)
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: Text(
+                  'loading...',
+                  style: TextStyle(fontSize: 11, color: t.fgMuted),
+                ),
+              )
+            else if (_error != null)
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: Text(
+                  'failed to load snapshots',
+                  style: TextStyle(fontSize: 11, color: t.statusError),
+                ),
+              )
+            else if (_snapshots.isEmpty)
               Padding(
                 padding: const EdgeInsets.all(20),
                 child: Text(
@@ -414,10 +484,7 @@ class _DrawIOLoadDialogState extends State<_DrawIOLoadDialog> {
                         CanvasPanel.drawioKey.currentState?.loadXmlSnapshot(snap.xml);
                         Navigator.of(context).pop();
                       },
-                      onDelete: () {
-                        DrawIOSnapshotStore.deleteById(snap.id);
-                        setState(() => _snapshots = DrawIOSnapshotStore.list());
-                      },
+                      onDelete: () => _deleteSnapshot(snap.id),
                       tokens: t,
                     );
                   },

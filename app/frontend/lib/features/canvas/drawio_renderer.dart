@@ -6,9 +6,9 @@ import 'dart:typed_data';
 import 'dart:ui_web' as ui_web;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../main.dart' show authClientProvider;
 import 'canvas_mode_provider.dart';
 
-const _drawIOSnapshotsStorageKey = 'trinity_drawio_xml_snapshots_v1';
 const _drawIORecoveryStorageKey = 'trinity_drawio_xml_recovery_v1';
 const _maxDrawIOSnapshots = 20;
 
@@ -57,20 +57,10 @@ class DrawIOSnapshot {
 }
 
 class DrawIOSnapshotStore {
-  static List<DrawIOSnapshot> list() {
-    final stored = html.window.localStorage[_drawIOSnapshotsStorageKey];
-    if (stored == null || stored.isEmpty) return [];
-    try {
-      final decoded = jsonDecode(stored) as List<dynamic>;
-      return decoded
-          .whereType<Map<String, dynamic>>()
-          .map(DrawIOSnapshot.fromJson)
-          .whereType<DrawIOSnapshot>()
-          .toList();
-    } catch (_) {
-      return [];
-    }
-  }
+  static const _baseUrl = String.fromEnvironment(
+    'AUTH_SERVICE_URL',
+    defaultValue: 'http://localhost',
+  );
 
   static String computeHash(String xml) {
     var hash = 2166136261;
@@ -81,36 +71,57 @@ class DrawIOSnapshotStore {
     return hash.toRadixString(16).padLeft(8, '0');
   }
 
-  static void save(String name, String xml) {
-    final now = DateTime.now();
-    final snapshots = list();
-    final hash = computeHash(xml);
-    final duplicateIndex = snapshots.indexWhere((s) => s.xmlHash == hash);
-    final duplicate = duplicateIndex >= 0 ? snapshots.removeAt(duplicateIndex) : null;
-    final safeName = name.trim().isEmpty
-        ? (duplicate?.name ?? _defaultName(now))
-        : name.trim();
-
-    snapshots.insert(
-      0,
-      DrawIOSnapshot(
-        id: duplicate?.id ?? '${now.microsecondsSinceEpoch}',
-        name: safeName,
-        xml: xml,
-        createdAt: now,
-        xmlHash: hash,
-      ),
+  static Future<List<DrawIOSnapshot>> list({
+    required String token,
+    required String openclawId,
+  }) async {
+    final response = await _request(
+      method: 'GET',
+      path: '/auth/openclaws/$openclawId/drawio/snapshots',
+      token: token,
     );
-    if (snapshots.length > _maxDrawIOSnapshots) {
-      snapshots.removeRange(_maxDrawIOSnapshots, snapshots.length);
-    }
-    _persist(snapshots);
+    final list = response['snapshots'] as List? ?? const [];
+    return list
+        .map((item) => DrawIOSnapshot.fromJson(Map<String, dynamic>.from(item as Map)))
+        .whereType<DrawIOSnapshot>()
+        .toList();
   }
 
-  static void deleteById(String id) {
-    final snapshots = list();
-    snapshots.removeWhere((s) => s.id == id);
-    _persist(snapshots);
+  static Future<List<DrawIOSnapshot>> save({
+    required String token,
+    required String openclawId,
+    required String name,
+    required String xml,
+  }) async {
+    final safeName = name.trim().isEmpty ? _defaultName(DateTime.now()) : name.trim();
+    final response = await _request(
+      method: 'POST',
+      path: '/auth/openclaws/$openclawId/drawio/snapshots',
+      token: token,
+      body: {'name': safeName, 'xml': xml},
+    );
+    final list = response['snapshots'] as List? ?? const [];
+    return list
+        .map((item) => DrawIOSnapshot.fromJson(Map<String, dynamic>.from(item as Map)))
+        .whereType<DrawIOSnapshot>()
+        .toList();
+  }
+
+  static Future<List<DrawIOSnapshot>> deleteById({
+    required String token,
+    required String openclawId,
+    required String id,
+  }) async {
+    final response = await _request(
+      method: 'DELETE',
+      path: '/auth/openclaws/$openclawId/drawio/snapshots/$id',
+      token: token,
+    );
+    final list = response['snapshots'] as List? ?? const [];
+    return list
+        .map((item) => DrawIOSnapshot.fromJson(Map<String, dynamic>.from(item as Map)))
+        .whereType<DrawIOSnapshot>()
+        .toList();
   }
 
   static void saveRecovery(String xml) {
@@ -133,9 +144,32 @@ class DrawIOSnapshotStore {
     return 'diagram-$yyyy$mm$dd-$hh$min$sec';
   }
 
-  static void _persist(List<DrawIOSnapshot> snapshots) {
-    final json = snapshots.map((s) => s.toJson()).toList();
-    html.window.localStorage[_drawIOSnapshotsStorageKey] = jsonEncode(json);
+  static Future<Map<String, dynamic>> _request({
+    required String method,
+    required String path,
+    required String token,
+    Map<String, dynamic>? body,
+  }) async {
+    final request = html.HttpRequest();
+    request.open(method, '$_baseUrl$path');
+    request.setRequestHeader('Authorization', 'Bearer $token');
+    request.setRequestHeader('Content-Type', 'application/json');
+
+    final completer = Completer<String>();
+    request.onLoad.listen((_) {
+      final status = request.status ?? 0;
+      if (status >= 200 && status < 300) {
+        completer.complete(request.responseText ?? '{}');
+      } else {
+        completer.completeError('HTTP $status: ${request.responseText}');
+      }
+    });
+    request.onError.listen((_) => completer.completeError('request failed'));
+    request.send(body == null ? null : jsonEncode(body));
+
+    final text = await completer.future;
+    if (text.trim().isEmpty) return {};
+    return Map<String, dynamic>.from(jsonDecode(text) as Map);
   }
 }
 
@@ -514,10 +548,22 @@ class DrawIORendererState extends ConsumerState<DrawIORenderer> {
       return false;
     }
     try {
-      DrawIOSnapshotStore.save(name, xml);
+      final authState = ref.read(authClientProvider).state;
+      final token = authState.token;
+      final openclawId = authState.activeOpenClawId;
+      if (token == null || token.isEmpty || openclawId == null || openclawId.isEmpty) {
+        _lastSaveError = 'missing auth/openclaw context';
+        return false;
+      }
+      await DrawIOSnapshotStore.save(
+        token: token,
+        openclawId: openclawId,
+        name: name,
+        xml: xml,
+      );
       return true;
     } catch (e) {
-      _lastSaveError = 'localStorage write failed: $e';
+      _lastSaveError = 'snapshot save failed: $e';
       return false;
     }
   }

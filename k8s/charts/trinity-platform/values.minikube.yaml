@@ -14,6 +14,9 @@ secrets:
   vaultToken: "root"
   orchestratorServiceToken: "trinity-orchestrator-token-123"
   zenApiKey: ""
+  lightragInternalToken: ""
+  lightragLlmApiKey: ""
+  lightragEmbeddingApiKey: ""
 
 urls:
   apiExternalUrl: "http://localhost"
@@ -105,6 +108,26 @@ copilot:
       memory: 256Mi
       cpu: 50m
 
+lightrag:
+  enabled: true
+  replicas: 1
+  llmModel: "Claude-Sonnet-4.5"
+  llmBaseUrl: "https://api.poe.com/v1"
+  embeddingModel: "BAAI/bge-m3"
+  embeddingBaseUrl: "https://api.deepinfra.com/v1/openai"
+  embeddingDim: 1024
+  embeddingMaxTokens: 8192
+  defaultQueryMode: "hybrid"
+  enableRerank: true
+  storage: 2Gi
+  resources:
+    limits:
+      memory: 3Gi
+      cpu: "2"
+    requests:
+      memory: 1Gi
+      cpu: "2"
+
 ingress:
   enabled: true
   className: nginx
@@ -132,6 +155,17 @@ extraIngresses:
     pathType: Prefix
     serviceName: loki
     servicePort: 3100
+  - name: lightrag
+    enabled: true
+    host: lightrag.localhost
+    path: /
+    pathType: Prefix
+    serviceName: lightrag
+    servicePort: 18803
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+      nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+      nginx.ingress.kubernetes.io/proxy-body-size: "10m"
 
 nginx:
   enabled: true

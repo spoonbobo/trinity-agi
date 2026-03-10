@@ -18,6 +18,26 @@ spec:
       labels:
         {{- include "openclaw.labels" . | nindent 8 }}
     spec:
+      initContainers:
+        - name: init-openclaw-config
+          image: {{ include "openclaw.image" . }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command:
+            - /bin/sh
+            - -lc
+            - |
+              if [ -f /home/node/.openclaw/openclaw.json ] && [ ! -w /home/node/.openclaw/openclaw.json ]; then
+                rm -f /home/node/.openclaw/openclaw.json
+              fi
+              if [ ! -f /home/node/.openclaw/openclaw.json ]; then
+                cp /etc/openclaw-config/openclaw.json /home/node/.openclaw/openclaw.json
+              fi
+          volumeMounts:
+            - name: data
+              mountPath: /home/node/.openclaw
+            - name: config-src
+              mountPath: /etc/openclaw-config
+              readOnly: true
       containers:
         - name: openclaw
           image: {{ include "openclaw.image" . }}
@@ -49,9 +69,8 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node/.openclaw
-            - name: config
-              mountPath: /home/node/.openclaw/openclaw.json
-              subPath: openclaw.json
+            - name: config-src
+              mountPath: /etc/openclaw-config
               readOnly: true
             - name: dshm
               mountPath: /dev/shm
@@ -75,7 +94,7 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "openclaw.name" . }}-data
-        - name: config
+        - name: config-src
           configMap:
             name: {{ include "openclaw.name" . }}-config
         - name: dshm

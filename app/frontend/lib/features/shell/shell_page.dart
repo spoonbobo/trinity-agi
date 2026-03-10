@@ -18,6 +18,7 @@ import '../chat/chat_stream.dart';
 import '../canvas/canvas_panel.dart';
 import '../canvas/canvas_mode_provider.dart';
 import '../governance/approval_panel.dart';
+import '../knowledge/knowledge_dialog.dart';
 import '../catalog/skills_cron_dialog.dart';
 import '../automations/automations_dialog.dart';
 
@@ -369,6 +370,11 @@ class _ShellPageState extends ConsumerState<ShellPage> {
   void _showSkillsDialog() {
     _dialogs.showUnique(context: context, id: 'skills',
       builder: (_) => const SkillsDialog());
+  }
+
+  void _showKnowledgeDialog() {
+    _dialogs.showUnique(context: context, id: 'knowledge',
+      builder: (_) => const KnowledgeDialog());
   }
 
   void _showAutomationsDialog() {
@@ -826,6 +832,13 @@ class _ShellPageState extends ConsumerState<ShellPage> {
             ],
             const Spacer(),
             if (!isMobile) ...[
+              _StatusModeActionLink(
+                label: tr(language, 'knowledge'),
+                onTap: _showKnowledgeDialog,
+                t: t,
+                textColor: t.accentPrimary,
+              ),
+              const SizedBox(width: 8),
               _StatusModeActionLink(
                 label: tr(language, 'skills'),
                 onTap: _showSkillsDialog,

@@ -17,6 +17,9 @@ secrets:
   grafanaPassword: ""
   vaultToken: "root"
   zenApiKey: ""
+  lightragInternalToken: ""
+  lightragLlmApiKey: ""
+  lightragEmbeddingApiKey: ""
   # Note: OPENCLAW_GATEWAY_TOKEN is now per-user, managed by the orchestrator.
   # This is the orchestrator's internal service token for inter-service auth.
   orchestratorServiceToken: ""
@@ -177,6 +180,29 @@ copilot:
       memory: 512Mi
       cpu: 100m
 
+# ─── LightRAG ───────────────────────────────────────────────────────────────
+lightrag:
+  enabled: true
+  image: trinity-lightrag:latest
+  port: 18803
+  replicas: 1
+  storage: 5Gi
+  llmModel: "Claude-Sonnet-4.5"
+  llmBaseUrl: "https://api.poe.com/v1"
+  embeddingModel: "BAAI/bge-m3"
+  embeddingBaseUrl: "https://api.deepinfra.com/v1/openai"
+  embeddingDim: 1024
+  embeddingMaxTokens: 8192
+  defaultQueryMode: "hybrid"
+  enableRerank: true
+  resources:
+    limits:
+      memory: 4Gi
+      cpu: "2"
+    requests:
+      memory: 2Gi
+      cpu: "2"
+
 # ─── Frontend ──────────────────────────────────────────────────────────────
 frontend:
   image: trinity-frontend:latest
@@ -207,6 +233,13 @@ extraIngresses: []
   #     enabled: false
   #     secretName: ""
   #   className: ""
+  # - name: lightrag
+  #   enabled: true
+  #   host: lightrag.localhost
+  #   path: /
+  #   pathType: Prefix
+  #   serviceName: lightrag
+  #   servicePort: 18803
 
 # ─── Nginx (internal reverse proxy, optional if using ingress directly) ───
 nginx:
