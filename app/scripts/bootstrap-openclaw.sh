@@ -100,6 +100,13 @@ else
   echo "[bootstrap] Keeping existing $OPENCLAW_HOME/workspace/MEMORY.md"
 fi
 
+# ── Gateway auth token: ALWAYS sync from env var to override stale PVC config ──
+if [ -n "${OPENCLAW_GATEWAY_TOKEN:-}" ]; then
+  openclaw config set gateway.auth.token "\"$OPENCLAW_GATEWAY_TOKEN\"" >/dev/null 2>&1 \
+    && echo "[bootstrap] Synced gateway.auth.token from env" \
+    || echo "[bootstrap] WARN: Failed to sync gateway.auth.token" >&2
+fi
+
 # ACP defaults (idempotent; only fills missing keys)
 ensure_config "plugins.entries.acpx.enabled" "true"
 ensure_config "acp.enabled" "true"

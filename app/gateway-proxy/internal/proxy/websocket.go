@@ -61,6 +61,7 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, backend *resolver.B
 			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "upstream challenge error"))
 		return
 	}
+	log.Printf("[ws-debug] challenge received (%d bytes): %s", len(challengeData), truncate(string(challengeData), 200))
 	if err := clientConn.WriteMessage(challengeMsgType, challengeData); err != nil {
 		log.Printf("client challenge write error: %v", err)
 		return
@@ -77,9 +78,10 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, backend *resolver.B
 	// Step 4: Forward the hello-ok response from upstream to client
 	helloMsgType, helloData, err := upstreamConn.ReadMessage()
 	if err != nil {
-		log.Printf("upstream hello-ok read error: %v", err)
+		log.Printf("[ws-debug] upstream hello-ok read error: %v", err)
 		return
 	}
+	log.Printf("[ws-debug] hello-ok received (%d bytes): %s", len(helloData), truncate(string(helloData), 200))
 	if err := clientConn.WriteMessage(helloMsgType, helloData); err != nil {
 		log.Printf("client hello-ok write error: %v", err)
 		return
@@ -161,6 +163,13 @@ func handleConnectFrame(clientConn, upstreamConn *websocket.Conn, gatewayToken s
 
 // rewriteConnectToken parses a connect frame JSON, replaces the auth token,
 // and re-serializes it. Uses a generic map to preserve all other fields.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
 func rewriteConnectToken(data []byte, gatewayToken string) ([]byte, error) {
 	var msg map[string]interface{}
 	if err := json.Unmarshal(data, &msg); err != nil {
@@ -187,7 +196,9 @@ func rewriteConnectToken(data []byte, gatewayToken string) ([]byte, error) {
 	}
 
 	// Replace the token
+	oldToken, _ := authMap["token"].(string)
 	authMap["token"] = gatewayToken
+	log.Printf("[ws-debug] token rewrite: old=%s... new=%s...", truncate(oldToken, 20), truncate(gatewayToken, 20))
 
 	// Re-serialize
 	result, err := json.Marshal(msg)
@@ -195,5 +206,6 @@ func rewriteConnectToken(data []byte, gatewayToken string) ([]byte, error) {
 		return nil, fmt.Errorf("marshalling rewritten connect frame: %w", err)
 	}
 
+	log.Printf("[ws-debug] rewritten connect frame: %s", truncate(string(result), 200))
 	return result, nil
 }
