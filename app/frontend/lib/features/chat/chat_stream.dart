@@ -18,6 +18,29 @@ String _formatTimestamp(DateTime ts) {
   return '$h:$m';
 }
 
+void _openHrefInBrowser(String href) {
+  if (href.isEmpty) return;
+  try {
+    html.window.open(href, '_blank');
+  } catch (_) {
+    Clipboard.setData(ClipboardData(text: href));
+  }
+}
+
+String _resolveMediaHref(String href, {String? authToken, String? openclawId}) {
+  var base = href.replaceFirst('/__openclaw__/media/media/', '/__openclaw__/media/');
+  if (!base.startsWith('/__openclaw__/media/')) return base;
+  final uri = Uri.parse(base);
+  final qp = Map<String, String>.from(uri.queryParameters);
+  if (!qp.containsKey('openclaw') && (openclawId?.isNotEmpty ?? false)) {
+    qp['openclaw'] = openclawId!;
+  }
+  if (!qp.containsKey('token') && (authToken?.isNotEmpty ?? false)) {
+    qp['token'] = authToken!;
+  }
+  return uri.replace(queryParameters: qp.isEmpty ? null : qp).toString();
+}
+
 /// A single entry in the chat stream.
 class ChatEntry {
   final String role; // 'user', 'assistant', 'tool', 'system'
@@ -361,8 +384,7 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
     return attachments;
   }
 
-  /// Extract MEDIA: token paths from tool output and convert to media serving URLs.
-  /// Returns a list of `/__openclaw__/media/<relative>` URLs for image files.
+  /// Extract MEDIA: token paths from tool output and convert to media artifacts.
   static final _mediaTokenExtractRe = RegExp(
     r'MEDIA:\s*(.+)',
     caseSensitive: false,
@@ -370,10 +392,43 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
   );
   static const _workspacePrefix = '/home/node/.openclaw/workspace/';
   static const _imageExts = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.tiff', '.tif'};
+  static const Map<String, String> _mimeByExt = {
+    '.pdf': 'application/pdf',
+    '.doc': 'application/msword',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.txt': 'text/plain',
+    '.md': 'text/markdown',
+    '.json': 'application/json',
+    '.csv': 'text/csv',
+    '.xml': 'application/xml',
+    '.drawio': 'application/xml',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.xls': 'application/vnd.ms-excel',
+    '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    '.ppt': 'application/vnd.ms-powerpoint',
+    '.zip': 'application/zip',
+  };
 
-  static List<String> _extractMediaUrls(String text) {
+  static bool _isImagePath(String path) {
+    final lower = path.toLowerCase();
+    return _imageExts.any((ext) => lower.endsWith(ext));
+  }
+
+  static String _guessMimeType(String path) {
+    final lower = path.toLowerCase();
+    for (final entry in _mimeByExt.entries) {
+      if (lower.endsWith(entry.key)) return entry.value;
+    }
+    if (_isImagePath(path)) {
+      final ext = lower.contains('.') ? lower.substring(lower.lastIndexOf('.') + 1) : 'png';
+      return 'image/$ext';
+    }
+    return 'application/octet-stream';
+  }
+
+  static List<Map<String, dynamic>> _extractMediaArtifacts(String text) {
     if (text.isEmpty) return const [];
-    final urls = <String>[];
+    final artifacts = <Map<String, dynamic>>[];
     for (final match in _mediaTokenExtractRe.allMatches(text)) {
       var raw = match.group(1)?.trim() ?? '';
       // Strip surrounding backticks/quotes
@@ -385,10 +440,6 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
       }
       raw = raw.trim();
       if (raw.isEmpty) continue;
-      // Check if it's an image file
-      final lower = raw.toLowerCase();
-      final isImage = _imageExts.any((ext) => lower.endsWith(ext));
-      if (!isImage) continue;
       // Convert absolute workspace path to relative
       String relative;
       if (raw.startsWith(_workspacePrefix)) {
@@ -402,9 +453,15 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
       if (relative.startsWith('media/')) {
         relative = relative.substring('media/'.length);
       }
-      urls.add('/__openclaw__/media/$relative');
+      final fileName = relative.contains('/') ? relative.substring(relative.lastIndexOf('/') + 1) : relative;
+      artifacts.add({
+        'url': '/__openclaw__/media/$relative',
+        'fileName': fileName,
+        'mimeType': _guessMimeType(relative),
+        'isImage': _isImagePath(relative),
+      });
     }
-    return urls;
+    return artifacts;
   }
 
   void _seedLastCanvasSurface(List<dynamic> messages) {
@@ -674,16 +731,29 @@ class _ChatStreamViewState extends ConsumerState<ChatStreamView> {
               _updateLastToolEntry('Canvas updated', toolCallId: toolCallId);
             });
           } else {
-            // Extract MEDIA: tokens from tool result and render as images
-            final mediaImages = _extractMediaUrls(result);
+            // Extract MEDIA: tokens from tool result and render returned files.
+            final mediaArtifacts = _extractMediaArtifacts(result);
             final displayResult = result.isNotEmpty ? result : 'Done';
             setState(() {
               _updateLastToolEntry(displayResult, toolCallId: toolCallId);
-              // Add image entries for any MEDIA: tokens found in tool output
-              for (final url in mediaImages) {
+              for (final artifact in mediaArtifacts) {
+                final url = artifact['url'] as String? ?? '';
+                final name = artifact['fileName'] as String? ?? 'file';
+                final mimeType = artifact['mimeType'] as String? ?? 'application/octet-stream';
+                final isImage = artifact['isImage'] == true;
                 _entries.add(ChatEntry(
                   role: 'assistant',
-                  content: '![Generated image]($url)',
+                  content: isImage ? '![Generated image]($url)' : '[Generated file: $name]($url)',
+                  attachments: isImage
+                      ? null
+                      : [
+                          {
+                            'fileName': name,
+                            'mimeType': mimeType,
+                            'url': url,
+                            'type': 'file',
+                          }
+                        ],
                 ));
               }
               _capEntries();
@@ -1147,6 +1217,11 @@ class _UserBubbleState extends State<_UserBubble> {
     }).catchError((_) {});
   }
 
+  void _openHref(String href) {
+    if (href.isEmpty) return;
+    _openHrefInBrowser(_resolveMediaHref(href));
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -1233,21 +1308,46 @@ class _UserBubbleState extends State<_UserBubble> {
                             } else {
                               fileIcon = Icons.insert_drive_file;
                             }
-                            return Container(
+                            final url = a['url'] as String?;
+                            final resolvedUrl = (url == null || url.isEmpty)
+                                ? null
+                                : _resolveMediaHref(url);
+                            final chip = Container(
                               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                               decoration: BoxDecoration(
                                 borderRadius: kShellBorderRadiusSm,
                                 color: t.surfaceCard,
-                                border: Border.all(color: t.border, width: 0.5),
+                                border: Border.all(
+                                  color: resolvedUrl != null ? t.accentPrimaryMuted : t.border,
+                                  width: 0.5,
+                                ),
                               ),
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  Icon(fileIcon, size: 10, color: t.fgMuted),
+                                  Icon(
+                                    fileIcon,
+                                    size: 10,
+                                    color: resolvedUrl != null ? t.accentPrimary : t.fgMuted,
+                                  ),
                                   const SizedBox(width: 4),
                                   Text(name,
-                                    style: TextStyle(fontSize: 9, color: t.fgTertiary)),
+                                    style: TextStyle(
+                                      fontSize: 9,
+                                      color: resolvedUrl != null ? t.accentPrimary : t.fgTertiary,
+                                      decoration: resolvedUrl != null
+                                          ? TextDecoration.underline
+                                          : TextDecoration.none,
+                                    )),
                                 ],
+                              ),
+                            );
+                            if (resolvedUrl == null) return chip;
+                            return GestureDetector(
+                              onTap: () => _openHref(resolvedUrl),
+                              child: MouseRegion(
+                                cursor: SystemMouseCursors.click,
+                                child: chip,
                               ),
                             );
                           }),
@@ -1277,7 +1377,7 @@ class _UserBubbleState extends State<_UserBubble> {
                           ),
                           onTapLink: (text, href, title) {
                             if (href != null) {
-                              Clipboard.setData(ClipboardData(text: href));
+                              _openHref(href);
                             }
                           },
                         ),
@@ -1351,8 +1451,26 @@ class _AssistantBubbleState extends State<_AssistantBubble> {
   bool _hovering = false;
   bool _copied = false;
 
+  void _openHref(String href) {
+    if (href.isEmpty) return;
+    _openHrefInBrowser(
+      _resolveMediaHref(href, authToken: widget.authToken, openclawId: widget.openclawId),
+    );
+  }
+
   /// Image file extensions used for detection.
   static const _imgExts = r'\.(?:png|jpe?g|gif|webp|svg|bmp|tiff?)';
+  static final _imgExtsRe = RegExp(_imgExts + r'$', caseSensitive: false);
+  static final _nonImageWorkspacePathRe = RegExp(
+    r'(?<!\]\()' // not preceded by ](
+    r'/home/node/\.openclaw/workspace/([^\s)\]`]+)',
+    caseSensitive: false,
+  );
+  static final _nonImageMediaUrlRe = RegExp(
+    r'(?<!\]\()' // not preceded by ](
+    r'(/__openclaw__/media/[^\s)\]`]+)',
+    caseSensitive: false,
+  );
 
   /// 1. Bare /__openclaw__/media/ URLs not already inside markdown image syntax.
   static final _mediaUrlRe = RegExp(
@@ -1367,6 +1485,14 @@ class _AssistantBubbleState extends State<_AssistantBubble> {
     r'`/home/node/\.openclaw/workspace/([^`\s)\]]+' + _imgExts + r')`',
     caseSensitive: false,
   );
+  static final _backtickedNonImageWorkspaceRe = RegExp(
+    r'`/home/node/\.openclaw/workspace/([^`\s)\]]+)`',
+    caseSensitive: false,
+  );
+  static final _backtickedNonImageMediaUrlRe = RegExp(
+    r'`(/__openclaw__/media/[^`\s)\]]+)`',
+    caseSensitive: false,
+  );
 
   static final _absWorkspaceRe = RegExp(
     r'(?<!\]\()' // not preceded by ](
@@ -1377,6 +1503,11 @@ class _AssistantBubbleState extends State<_AssistantBubble> {
   /// 3. MEDIA: token lines (in case gateway didn't strip them).
   static final _mediaTokenRe = RegExp(
     r'MEDIA:\s*([^\s]+' + _imgExts + ')',
+    caseSensitive: false,
+  );
+
+  static final _mediaFileTokenRe = RegExp(
+    r'MEDIA:\s*([^\s)\]`]+)',
     caseSensitive: false,
   );
 
@@ -1405,6 +1536,23 @@ class _AssistantBubbleState extends State<_AssistantBubble> {
       return '![image](/__openclaw__/media/$relative)';
     });
 
+    // Pass 0b: Convert backticked absolute workspace paths for non-image files.
+    result = result.replaceAllMapped(_backtickedNonImageWorkspaceRe, (m) {
+      final relativeRaw = m.group(1)!;
+      if (_imgExtsRe.hasMatch(relativeRaw.toLowerCase())) return m.group(0)!;
+      final relative = normalizeRelative(relativeRaw);
+      final name = relative.contains('/') ? relative.substring(relative.lastIndexOf('/') + 1) : relative;
+      return '[${name}](/__openclaw__/media/$relative)';
+    });
+
+    // Pass 0c: Convert backticked media URLs for non-image files.
+    result = result.replaceAllMapped(_backtickedNonImageMediaUrlRe, (m) {
+      final url = m.group(1)!;
+      if (_imgExtsRe.hasMatch(url.toLowerCase())) return m.group(0)!;
+      final name = url.contains('/') ? url.substring(url.lastIndexOf('/') + 1) : url;
+      return '[$name]($url)';
+    });
+
     // Pass 1: Convert absolute workspace paths to media URLs
     result = result.replaceAllMapped(_absWorkspaceRe, (m) {
       if (m.start > 0 && result[m.start - 1] == '(') return m.group(0)!;
@@ -1423,11 +1571,44 @@ class _AssistantBubbleState extends State<_AssistantBubble> {
       return '![image](/__openclaw__/media/$relative)';
     });
 
+    // Pass 2b: Convert remaining MEDIA: tokens for non-image files to markdown links.
+    result = result.replaceAllMapped(_mediaFileTokenRe, (m) {
+      final raw = m.group(1)!;
+      final lower = raw.toLowerCase();
+      if (_imgExtsRe.hasMatch(lower)) return m.group(0)!;
+      final relativeRaw = raw.startsWith('/home/node/.openclaw/workspace/')
+          ? raw.substring('/home/node/.openclaw/workspace/'.length)
+          : raw;
+      if (relativeRaw.startsWith('/')) return m.group(0)!;
+      final relative = normalizeRelative(relativeRaw);
+      final name = relative.contains('/') ? relative.substring(relative.lastIndexOf('/') + 1) : relative;
+      return '[Generated file: $name](/__openclaw__/media/$relative)';
+    });
+
+    // Pass 2c: Convert absolute workspace paths for non-image files to markdown links.
+    result = result.replaceAllMapped(_nonImageWorkspacePathRe, (m) {
+      if (m.start > 0 && result[m.start - 1] == '(') return m.group(0)!;
+      final relativeRaw = m.group(1)!;
+      if (_imgExtsRe.hasMatch(relativeRaw.toLowerCase())) return m.group(0)!;
+      final relative = normalizeRelative(relativeRaw);
+      final name = relative.contains('/') ? relative.substring(relative.lastIndexOf('/') + 1) : relative;
+      return '[${name}](/__openclaw__/media/$relative)';
+    });
+
     // Pass 3: Convert bare /__openclaw__/media/ URLs
     result = result.replaceAllMapped(_mediaUrlRe, (m) {
       if (m.start > 0 && result[m.start - 1] == '(') return m.group(0)!;
       final url = m.group(1)!;
       return '![image]($url)';
+    });
+
+    // Pass 4: Convert bare non-image media URLs to markdown links.
+    result = result.replaceAllMapped(_nonImageMediaUrlRe, (m) {
+      if (m.start > 0 && result[m.start - 1] == '(') return m.group(0)!;
+      final url = m.group(1)!;
+      if (_imgExtsRe.hasMatch(url.toLowerCase())) return m.group(0)!;
+      final name = url.contains('/') ? url.substring(url.lastIndexOf('/') + 1) : url;
+      return '[$name]($url)';
     });
 
     return result;
@@ -1530,7 +1711,7 @@ class _AssistantBubbleState extends State<_AssistantBubble> {
                       },
                       onTapLink: (text, href, title) {
                         if (href != null) {
-                          Clipboard.setData(ClipboardData(text: href));
+                          _openHref(href);
                         }
                       },
                     ),
@@ -1870,17 +2051,7 @@ class _ChatImageState extends State<_ChatImage> {
   bool _copied = false;
 
   String get _resolvedUrl {
-    var base = widget.url.replaceFirst('/__openclaw__/media/media/', '/__openclaw__/media/');
-    if (!base.startsWith('/__openclaw__/media/')) return base;
-    final uri = Uri.parse(base);
-    final qp = Map<String, String>.from(uri.queryParameters);
-    if (!qp.containsKey('openclaw') && (widget.openclawId?.isNotEmpty ?? false)) {
-      qp['openclaw'] = widget.openclawId!;
-    }
-    if (!qp.containsKey('token') && (widget.authToken?.isNotEmpty ?? false)) {
-      qp['token'] = widget.authToken!;
-    }
-    return uri.replace(queryParameters: qp.isEmpty ? null : qp).toString();
+    return _resolveMediaHref(widget.url, authToken: widget.authToken, openclawId: widget.openclawId);
   }
 
   void _downloadImage() {
