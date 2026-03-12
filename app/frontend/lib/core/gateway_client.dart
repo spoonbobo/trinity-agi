@@ -28,6 +28,8 @@ class GatewayClient extends ChangeNotifier {
   WebSocketChannel? _channel;
   ConnectionState _state = ConnectionState.disconnected;
   final _uuid = const Uuid();
+  int _connectionEpoch = 0;
+  Timer? _connectTimeoutTimer;
 
   final _responseCompleters = <String, Completer<WsResponse>>{};
 
@@ -49,29 +51,46 @@ class GatewayClient extends ChangeNotifier {
 
   Future<void> connect() async {
     if (_state == ConnectionState.connected ||
-        _state == ConnectionState.connecting) return;
+        _state == ConnectionState.connecting) {
+      return;
+    }
 
     _shouldReconnect = true;
     _state = ConnectionState.connecting;
     notifyListeners();
 
     try {
+      final epoch = ++_connectionEpoch;
       // Append JWT as query parameter for the gateway-proxy to authenticate
       // the upgrade request. Browsers cannot send custom headers during WS.
       final wsUri = Uri.parse(url);
-      final authedUri = auth.token != null
+      final authedUri = auth.token.isNotEmpty
           ? wsUri.replace(queryParameters: {
               ...wsUri.queryParameters,
-              'token': auth.token!,
+              'token': auth.token,
               if (openclawId != null) 'openclaw': openclawId!,
             })
           : wsUri;
       _channel = WebSocketChannel.connect(authedUri);
       await _channel!.ready;
+      _connectTimeoutTimer?.cancel();
+      _connectTimeoutTimer = Timer(const Duration(seconds: 10), () {
+        if (_disposed) return;
+        if (epoch != _connectionEpoch) return;
+        if (_state == ConnectionState.connecting) {
+          if (kDebugMode) {
+            debugPrint('[GW] connect handshake timeout; forcing reconnect');
+          }
+          _channel?.sink.close();
+          _state = ConnectionState.error;
+          notifyListeners();
+          _scheduleReconnect();
+        }
+      });
       _channel!.stream.listen(
-        _onMessage,
-        onError: _onError,
-        onDone: _onDone,
+        (raw) => _onMessage(raw, epoch),
+        onError: (error) => _onError(error, epoch),
+        onDone: () => _onDone(epoch),
       );
     } catch (e) {
       _state = ConnectionState.error;
@@ -95,7 +114,8 @@ class GatewayClient extends ChangeNotifier {
       name.startsWith('canvas.') ||
       name.startsWith('browser.');
 
-  void _onMessage(dynamic raw) {
+  void _onMessage(dynamic raw, int epoch) {
+    if (epoch != _connectionEpoch) return;
     try {
       if (raw is! String) return; // Ignore binary frames
       final rawStr = raw;
@@ -118,6 +138,7 @@ class GatewayClient extends ChangeNotifier {
           }
           if (response.ok &&
               response.payload?['type'] == 'hello-ok') {
+            _connectTimeoutTimer?.cancel();
             _state = ConnectionState.connected;
             _reconnectAttempts = 0; // Reset on successful connect
             _reconnectTimer?.cancel();
@@ -280,12 +301,16 @@ class GatewayClient extends ChangeNotifier {
     });
   }
 
-  void _onError(dynamic error) {
+  void _onError(dynamic error, int epoch) {
+    if (epoch != _connectionEpoch) return;
+    _connectTimeoutTimer?.cancel();
     _state = ConnectionState.error;
     notifyListeners();
   }
 
-  void _onDone() {
+  void _onDone(int epoch) {
+    if (epoch != _connectionEpoch) return;
+    _connectTimeoutTimer?.cancel();
     final closeCode = _channel?.closeCode;
     _state = ConnectionState.disconnected;
     _failPendingCompleters('Connection closed');
@@ -325,6 +350,8 @@ class GatewayClient extends ChangeNotifier {
 
   void disconnect() {
     _shouldReconnect = false;
+    _connectionEpoch++;
+    _connectTimeoutTimer?.cancel();
     _reconnectTimer?.cancel();
     _reconnectAttempts = 0;
     _channel?.sink.close();
@@ -508,6 +535,7 @@ class GatewayClient extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _shouldReconnect = false;
+    _connectTimeoutTimer?.cancel();
     disconnect();
     _eventController.close();
     super.dispose();

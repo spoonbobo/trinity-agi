@@ -416,7 +416,11 @@ router.get('/openclaws', async (req, res) => {
         try {
           const statusRes = await fetch(
             `${ORCHESTRATOR_URL}/openclaws/${oc.id}/status`,
-            { headers: { Authorization: `Bearer ${ORCHESTRATOR_SERVICE_TOKEN}` } }
+            {
+              headers: { Authorization: `Bearer ${ORCHESTRATOR_SERVICE_TOKEN}` },
+              // Keep /auth/openclaws responsive even when orchestrator status probes stall.
+              signal: AbortSignal.timeout(2500),
+            }
           );
           if (statusRes.ok) {
             const statusData = await statusRes.json();
