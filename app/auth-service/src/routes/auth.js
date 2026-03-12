@@ -14,6 +14,7 @@ const LIGHTRAG_URL = process.env.LIGHTRAG_URL || 'http://lightrag:18803';
 const LIGHTRAG_INTERNAL_TOKEN = process.env.LIGHTRAG_INTERNAL_TOKEN || '';
 const DELEGATION_JWT_SECRET = process.env.DELEGATION_JWT_SECRET || process.env.OPENCLAW_DELEGATION_SECRET || '';
 const GUEST_JWT_TTL = 3600; // 1 hour
+const DRAWIO_XML_MAX_BYTES = 10 * 1024 * 1024;
 
 const DELEGATION_ISSUER = 'trinity-auth-service';
 const DELEGATION_AUDIENCE = 'trinity-openclaw';
@@ -1466,8 +1467,8 @@ router.post('/openclaws/:id/drawio/snapshots', async (req, res) => {
     if (!xml.trim()) {
       return res.status(400).json({ error: 'xml is required' });
     }
-    if (xml.length > 2 * 1024 * 1024) {
-      return res.status(413).json({ error: 'xml exceeds 2MB limit' });
+    if (Buffer.byteLength(xml, 'utf8') > DRAWIO_XML_MAX_BYTES) {
+      return res.status(413).json({ error: 'xml exceeds 10MB limit' });
     }
 
     const effectiveName = name || `diagram-${new Date().toISOString().replace(/[:.]/g, '-')}`;

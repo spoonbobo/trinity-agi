@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:force_graph/force_graph.dart';
 
 import '../../core/theme.dart';
 import '../../main.dart' show authClientProvider;
@@ -17,23 +17,18 @@ class KnowledgeDialog extends ConsumerStatefulWidget {
 }
 
 class _KnowledgeDialogState extends ConsumerState<KnowledgeDialog> {
+  static const int _graphDepthDefault = 2;
+  static const int _graphNodesDefault = 120;
   bool _loading = true;
   String? _error;
   Map<String, dynamic>? _graph;
   List<dynamic> _labels = const [];
 
   final TextEditingController _searchCtrl = TextEditingController();
-  Timer? _searchDebounce;
-
   String? _selectedLabel;
   String _searchQuery = '';
-  String _entityKindFilter = 'all';
   String _activeView = 'graph';
-  int _maxDepth = 3;
-  int _maxNodes = 500;
-  bool _neighborsOnly = false;
-  bool _searchingRemote = false;
-  bool _showAdvanced = false;
+  String _graphMode = 'details';
   bool _docsLoading = false;
   String? _docsError;
   List<Map<String, dynamic>> _documents = const [];
@@ -46,15 +41,13 @@ class _KnowledgeDialogState extends ConsumerState<KnowledgeDialog> {
   String _docQuery = '';
 
   String? _selectedNodeId;
-  List<Map<String, dynamic>> _searchResults = const [];
+  final Map<String, GlobalKey> _wikiItemKeys = <String, GlobalKey>{};
 
   @override
   void initState() {
     super.initState();
     _searchCtrl.addListener(() {
-      _searchQuery = _searchCtrl.text.trim();
-      _refreshLocalSearch();
-      _debouncedRemoteSearch();
+      setState(() => _searchQuery = _searchCtrl.text.trim());
     });
     _docSearchCtrl.addListener(() {
       setState(() => _docQuery = _docSearchCtrl.text.trim());
@@ -64,7 +57,6 @@ class _KnowledgeDialogState extends ConsumerState<KnowledgeDialog> {
 
   @override
   void dispose() {
-    _searchDebounce?.cancel();
     _searchCtrl.dispose();
     _docSearchCtrl.dispose();
     super.dispose();
@@ -382,8 +374,8 @@ class _KnowledgeDialogState extends ConsumerState<KnowledgeDialog> {
     try {
       final query = <String, String>{
         if (label != null && label.isNotEmpty) 'label': label,
-        'max_depth': _maxDepth.toString(),
-        'max_nodes': _maxNodes.toString(),
+        'max_depth': _graphDepthDefault.toString(),
+        'max_nodes': _graphNodesDefault.toString(),
       };
       final qs = query.entries
           .map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}')
@@ -404,8 +396,6 @@ class _KnowledgeDialogState extends ConsumerState<KnowledgeDialog> {
         _selectedLabel = data['selectedLabel']?.toString();
         _graph = Map<String, dynamic>.from((data['graph'] as Map?) ?? const {});
       });
-
-      _refreshLocalSearch();
       _ensureSelectedNodeExists();
     } catch (e) {
       if (!mounted) return;
@@ -420,71 +410,6 @@ class _KnowledgeDialogState extends ConsumerState<KnowledgeDialog> {
       }
     }
   }
-
-  Future<void> _remoteSearch() async {
-    final query = _searchQuery.trim();
-    if (query.length < 2) return;
-    final auth = ref.read(authClientProvider);
-    final token = auth.state.token;
-    final openclawId = auth.state.activeOpenClawId;
-    if (token == null || token.isEmpty || openclawId == null || openclawId.isEmpty) return;
-
-    setState(() => _searchingRemote = true);
-    try {
-      final params = <String, String>{
-        'q': query,
-        if (_selectedLabel != null && _selectedLabel!.isNotEmpty) 'label': _selectedLabel!,
-        'max_depth': _maxDepth.toString(),
-        'max_nodes': _maxNodes.toString(),
-        'limit': '30',
-      };
-      final qs = params.entries
-          .map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}')
-          .join('&');
-
-      final url = '${auth.authServiceBaseUrl}/auth/openclaws/$openclawId/lightrag-search?$qs';
-      final request = html.HttpRequest();
-      request.open('GET', url);
-      request.setRequestHeader('Authorization', 'Bearer $token');
-      final response = await _sendRequest(request);
-      final decoded = Map<String, dynamic>.from(jsonDecode(response) as Map);
-      final remote = (decoded['results'] as List? ?? const [])
-          .whereType<Map>()
-          .map((e) => e.map((k, v) => MapEntry(k.toString(), v)))
-          .toList();
-
-      if (!mounted) return;
-      final merged = <String, Map<String, dynamic>>{
-        for (final r in _searchResults) (r['id'] ?? '').toString(): r,
-      };
-      for (final r in remote) {
-        final id = (r['id'] ?? '').toString();
-        if (id.isEmpty) continue;
-        merged[id] = {
-          ...r,
-          'score': (r['score'] as num?)?.toDouble() ?? 0.0,
-          'source': 'remote',
-        };
-      }
-      final items = merged.values.toList()
-        ..sort((a, b) =>
-            ((b['score'] as num?) ?? 0).compareTo((a['score'] as num?) ?? 0));
-
-      setState(() {
-        _searchResults = items.take(60).toList();
-      });
-    } catch (_) {
-      // Keep local results if remote search fails.
-    } finally {
-      if (mounted) setState(() => _searchingRemote = false);
-    }
-  }
-
-  void _debouncedRemoteSearch() {
-    _searchDebounce?.cancel();
-    _searchDebounce = Timer(const Duration(milliseconds: 320), _remoteSearch);
-  }
-
 
   Future<String> _sendRequest(html.HttpRequest request) {
     final completer = Completer<String>();
@@ -532,154 +457,75 @@ class _KnowledgeDialogState extends ConsumerState<KnowledgeDialog> {
         const [];
   }
 
-  Set<String> get _entityKinds {
-    final out = <String>{};
-    for (final n in _graphNodes) {
-      final kind = ((n['entity_type'] ?? n['kind']) ?? 'unknown').toString();
-      out.add(kind);
-    }
-    return out;
-  }
-
   ({List<Map<String, dynamic>> nodes, List<Map<String, dynamic>> edges})
       _computeVisibleGraph() {
-    var nodes = _graphNodes;
-    var edges = _graphEdges;
-
-    if (_entityKindFilter != 'all') {
-      nodes = nodes
-          .where((n) =>
-              (((n['entity_type'] ?? n['kind']) ?? 'unknown').toString() ==
-                  _entityKindFilter))
-          .toList();
-      final allowed = nodes
-          .map((n) => (n['id'] ?? n['identity'] ?? '').toString())
-          .where((id) => id.isNotEmpty)
-          .toSet();
-      edges = edges
-          .where((e) =>
-              allowed.contains((e['source'] ?? '').toString()) &&
-              allowed.contains((e['target'] ?? '').toString()))
-          .toList();
-    }
-
-    if (_neighborsOnly && _selectedNodeId != null && _selectedNodeId!.isNotEmpty) {
-      final center = _selectedNodeId!;
-      final hasCenter = nodes.any(
-        (n) => (n['id'] ?? n['identity'] ?? '').toString() == center,
-      );
-      if (!hasCenter) {
-        return (nodes: nodes, edges: edges);
-      }
-      final keep = <String>{center};
-      for (final e in edges) {
-        final s = (e['source'] ?? '').toString();
-        final t = (e['target'] ?? '').toString();
-        if (s == center) keep.add(t);
-        if (t == center) keep.add(s);
-      }
-      nodes = nodes
-          .where((n) => keep.contains((n['id'] ?? n['identity'] ?? '').toString()))
-          .toList();
-      edges = edges
-          .where((e) {
-            final s = (e['source'] ?? '').toString();
-            final t = (e['target'] ?? '').toString();
-            return keep.contains(s) && keep.contains(t);
-          })
-          .toList();
-    }
-
-    return (nodes: nodes, edges: edges);
+    return (nodes: _graphNodes, edges: _graphEdges);
   }
 
-  void _refreshLocalSearch() {
-    final edges = _graphEdges;
-    final degree = <String, int>{};
-    for (final e in edges) {
-      final s = (e['source'] ?? '').toString();
-      final t = (e['target'] ?? '').toString();
-      if (s.isNotEmpty) degree[s] = (degree[s] ?? 0) + 1;
-      if (t.isNotEmpty) degree[t] = (degree[t] ?? 0) + 1;
-    }
-
+  List<Map<String, dynamic>> _sortedWikiNodes() {
     final q = _searchQuery.trim().toLowerCase();
-    final scored = <Map<String, dynamic>>[];
-    for (final n in _graphNodes) {
-      final id = (n['id'] ?? n['identity'] ?? '').toString();
-      if (id.isEmpty) continue;
-      final labels = (n['labels'] as List?)?.map((e) => e.toString()).toList() ?? const [];
-      final label = (labels.isNotEmpty ? labels.first : (n['label'] ?? id)).toString();
-      final kind = ((n['entity_type'] ?? n['kind']) ?? 'unknown').toString();
-      final preview = ((n['properties'] as Map?)?['description'] ??
-              (n['metadata'] as Map?)?['preview'] ??
-              '')
-          .toString();
+    final items = _graphNodes.where((n) {
+      if (q.isEmpty) return true;
+      final label = _nodeLabel(n).toLowerCase();
+      final preview = _nodePreview(n).toLowerCase();
+      final id = (n['id'] ?? n['identity'] ?? '').toString().toLowerCase();
+      return label.contains(q) || preview.contains(q) || id.contains(q);
+    }).toList()
+      ..sort((a, b) => _nodeLabel(a).toLowerCase().compareTo(_nodeLabel(b).toLowerCase()));
+    return items;
+  }
 
-      var score = 0.0;
-      if (q.isNotEmpty) {
-        final candidates = [id, label, kind, preview];
-        for (final c in candidates) {
-          final v = c.toLowerCase();
-          if (v == q) {
-            score += 100;
-          } else if (v.startsWith(q)) {
-            score += 60;
-          } else if (v.contains(q)) {
-            score += 25;
-          }
-        }
-      } else {
-        score = (degree[id] ?? 0).toDouble();
+  String? _firstWikiNodeId() {
+    final items = _sortedWikiNodes();
+    if (items.isEmpty) return null;
+    final first = items.first;
+    final id = (first['id'] ?? first['identity'] ?? '').toString();
+    return id.isEmpty ? null : id;
+  }
+
+  GlobalKey _wikiItemKey(String id) {
+    return _wikiItemKeys.putIfAbsent(id, () => GlobalKey());
+  }
+
+  void _syncWikiIndexToSelection() {
+    final id = _selectedNodeId;
+    if (id == null || id.isEmpty) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final context = _wikiItemKeys[id]?.currentContext;
+      if (context != null) {
+        Scrollable.ensureVisible(
+          context,
+          duration: const Duration(milliseconds: 180),
+          alignment: 0.3,
+          curve: Curves.easeOut,
+        );
       }
-      if (score > 0) {
-        score += (degree[id] ?? 0).clamp(0, 15);
-        scored.add({
-          'id': id,
-          'label': label,
-          'kind': kind,
-          'preview': preview,
-          'degree': degree[id] ?? 0,
-          'score': score,
-          'source': 'local',
-        });
-      }
-    }
-
-    scored.sort((a, b) =>
-        ((b['score'] as num?) ?? 0).compareTo((a['score'] as num?) ?? 0));
-
-    setState(() {
-      _searchResults = scored.take(60).toList();
     });
   }
 
   void _ensureSelectedNodeExists() {
-    if (_selectedNodeId == null || _selectedNodeId!.isEmpty) return;
-    final exists = _graphNodes.any((n) =>
-        (n['id'] ?? n['identity'] ?? '').toString() == _selectedNodeId);
-    if (!exists) {
-      setState(() {
-        _selectedNodeId = null;
-        _neighborsOnly = false;
-      });
+    final exists = _selectedNodeId != null &&
+        _selectedNodeId!.isNotEmpty &&
+        _graphNodes.any((n) => (n['id'] ?? n['identity'] ?? '').toString() == _selectedNodeId);
+    final fallback = _firstWikiNodeId();
+    if (exists) {
+      _syncWikiIndexToSelection();
+      return;
     }
+    if (fallback == null) return;
+    setState(() {
+      _selectedNodeId = fallback;
+    });
+    _syncWikiIndexToSelection();
   }
 
   void _selectNodeFromResult(String id) {
     if (id.isEmpty) return;
-    final visibleNow = _computeVisibleGraph();
-    final existsInVisible = visibleNow.nodes.any(
-      (n) => (n['id'] ?? n['identity'] ?? '').toString() == id,
-    );
-
     setState(() {
       _selectedNodeId = id;
-      if (!existsInVisible) {
-        _neighborsOnly = false;
-        _entityKindFilter = 'all';
-      }
     });
+    _syncWikiIndexToSelection();
   }
 
   @override
@@ -710,7 +556,9 @@ class _KnowledgeDialogState extends ConsumerState<KnowledgeDialog> {
         child: Column(
           children: [
             _buildHeader(context, t, theme, visible.nodes.length, visible.edges.length),
-            if (isGraphView) _buildControls(context, t, theme) else _buildDocumentsControls(context, t, theme),
+            _activeView == 'graph'
+                ? _buildControls(context, t, theme)
+                : _buildDocumentsControls(context, t, theme),
             Expanded(
               child: isGraphView
                   ? _loading
@@ -726,27 +574,31 @@ class _KnowledgeDialogState extends ConsumerState<KnowledgeDialog> {
                                 _error!,
                                 style: theme.textTheme.bodyMedium?.copyWith(color: t.statusError),
                               ),
-                            )
-                          : Padding(
-                              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    flex: 7,
-                                    child: _KnowledgeGraphCanvas(
-                                      nodes: visible.nodes,
-                                      edges: visible.edges,
-                                      isTruncated: isTruncated,
-                                    ),
-                                  ),
-                                  Container(width: 0.5, color: t.border),
-                                  SizedBox(
-                                    width: 300,
-                                    child: _buildSidePanel(context, t, theme, selectedNode),
-                                  ),
-                                ],
-                              ),
-                            )
+                           )
+                        : Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                            child: Row(
+                              children: [
+                                SizedBox(
+                                  width: 300,
+                                  child: _buildWikiIndexPanel(context, t, theme),
+                                ),
+                                Container(width: 0.5, color: t.border),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: _graphMode == 'details'
+                                      ? _buildDetailsPanel(context, t, theme, selectedNode)
+                                      : _KnowledgeGraphCanvas(
+                                          nodes: visible.nodes,
+                                          edges: visible.edges,
+                                          selectedNodeId: _selectedNodeId,
+                                          onNodeTap: _selectNodeFromResult,
+                                          isTruncated: isTruncated,
+                                        ),
+                                ),
+                              ],
+                            ),
+                          )
                   : _buildDocumentsBody(context, t, theme),
             ),
           ],
@@ -785,23 +637,14 @@ class _KnowledgeDialogState extends ConsumerState<KnowledgeDialog> {
             style: theme.textTheme.labelSmall?.copyWith(color: t.fgMuted),
           ),
           const SizedBox(width: 10),
-          _presetChip(
-            context,
-            t,
-            theme,
-            _activeView == 'graph' ? 'graph' : 'graph (off)',
-            onTap: () => setState(() => _activeView = 'graph'),
-          ),
-          _presetChip(
-            context,
-            t,
-            theme,
-            _activeView == 'documents' ? 'documents' : 'documents (off)',
-            onTap: () {
-              setState(() => _activeView = 'documents');
-              _loadDocuments();
-            },
-          ),
+          _headerToggleLink(context, t, theme, 'graph', active: _activeView == 'graph', onTap: () {
+            setState(() => _activeView = 'graph');
+          }),
+          Text('|', style: theme.textTheme.labelSmall?.copyWith(color: t.fgMuted)),
+          _headerToggleLink(context, t, theme, 'documents', active: _activeView == 'documents', onTap: () {
+            setState(() => _activeView = 'documents');
+            _loadDocuments();
+          }),
           const Spacer(),
           GestureDetector(
             onTap: _activeView == 'graph'
@@ -831,10 +674,30 @@ class _KnowledgeDialogState extends ConsumerState<KnowledgeDialog> {
     );
   }
 
-  Widget _buildControls(BuildContext context, ShellTokens t, ThemeData theme) {
-    final labels = _labels.map((e) => e.toString()).where((e) => e.isNotEmpty).toList();
-    final kinds = ['all', ..._entityKinds.toList()..sort()];
+  Widget _headerToggleLink(
+    BuildContext context,
+    ShellTokens t,
+    ThemeData theme,
+    String label, {
+    required bool active,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: Text(
+          label,
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: active ? t.accentPrimary : t.fgMuted,
+            fontWeight: active ? FontWeight.w600 : FontWeight.w400,
+          ),
+        ),
+      ),
+    );
+  }
 
+  Widget _buildControls(BuildContext context, ShellTokens t, ThemeData theme) {
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
       decoration: BoxDecoration(
@@ -846,23 +709,6 @@ class _KnowledgeDialogState extends ConsumerState<KnowledgeDialog> {
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           SizedBox(
-            width: 230,
-            child: _compactDropdown<String>(
-              value: labels.contains(_selectedLabel)
-                  ? _selectedLabel
-                  : (labels.isNotEmpty ? labels.first : null),
-              items: labels,
-              onChanged: _loading
-                  ? null
-                  : (v) {
-                      if (v == null) return;
-                      _loadWithParams(label: v);
-                    },
-              t: t,
-              theme: theme,
-            ),
-          ),
-          SizedBox(
             width: 250,
             child: _compactInput(
               controller: _searchCtrl,
@@ -871,73 +717,23 @@ class _KnowledgeDialogState extends ConsumerState<KnowledgeDialog> {
               theme: theme,
             ),
           ),
-          _presetChip(
+          _headerToggleLink(
             context,
             t,
             theme,
-            _neighborsOnly ? 'neighbors on' : 'neighbors off',
-            onTap: () => setState(() => _neighborsOnly = !_neighborsOnly),
+            'wiki page',
+            active: _graphMode == 'details',
+            onTap: () => setState(() => _graphMode = 'details'),
           ),
-          _presetChip(
+          Text('|', style: theme.textTheme.labelSmall?.copyWith(color: t.fgMuted)),
+          _headerToggleLink(
             context,
             t,
             theme,
-            _showAdvanced ? 'hide advanced' : 'show advanced',
-            onTap: () => setState(() => _showAdvanced = !_showAdvanced),
+            'graph',
+            active: _graphMode == 'graph',
+            onTap: () => setState(() => _graphMode = 'graph'),
           ),
-          if (_searchingRemote)
-            Text(
-              'searching...',
-              style: theme.textTheme.labelSmall?.copyWith(color: t.fgMuted),
-            ),
-          if (_showAdvanced) ...[
-            SizedBox(
-              width: 66,
-              child: _compactDropdown<int>(
-                value: _maxDepth,
-                items: const [1, 2, 3, 4, 5],
-                onChanged: _loading
-                    ? null
-                    : (v) {
-                        if (v == null) return;
-                        setState(() => _maxDepth = v);
-                        _load();
-                      },
-                t: t,
-                theme: theme,
-              ),
-            ),
-            SizedBox(
-              width: 88,
-              child: _compactDropdown<int>(
-                value: _maxNodes,
-                items: const [100, 250, 500, 1000, 1500],
-                onChanged: _loading
-                    ? null
-                    : (v) {
-                        if (v == null) return;
-                        setState(() => _maxNodes = v);
-                        _load();
-                      },
-                t: t,
-                theme: theme,
-              ),
-            ),
-            SizedBox(
-              width: 120,
-              child: _compactDropdown<String>(
-                value: kinds.contains(_entityKindFilter) ? _entityKindFilter : 'all',
-                items: kinds,
-                onChanged: (v) {
-                  if (v == null) return;
-                  setState(() => _entityKindFilter = v);
-                  _refreshLocalSearch();
-                },
-                t: t,
-                theme: theme,
-              ),
-            ),
-          ],
         ],
       ),
     );
@@ -1110,30 +906,54 @@ class _KnowledgeDialogState extends ConsumerState<KnowledgeDialog> {
     );
   }
 
-  Widget _buildSidePanel(
-    BuildContext context,
-    ShellTokens t,
-    ThemeData theme,
-    Map<String, dynamic>? selectedNode,
-  ) {
-    final preview = ((selectedNode?['properties'] as Map?)?['description'] ??
-            (selectedNode?['metadata'] as Map?)?['preview'] ??
-            '')
+  String _nodeLabel(Map<String, dynamic> n) {
+    return (((n['labels'] as List?)?.first) ?? n['label'] ?? n['id'] ?? '').toString();
+  }
+
+  String _nodePreview(Map<String, dynamic> n) {
+    return ((n['properties'] as Map?)?['description'] ?? (n['metadata'] as Map?)?['preview'] ?? '')
         .toString();
-    final kind = ((selectedNode?['entity_type'] ?? selectedNode?['kind']) ?? 'node').toString();
-    final label = (((selectedNode?['labels'] as List?)?.first) ??
-            selectedNode?['label'] ??
-            selectedNode?['id'] ??
-            '')
-        .toString();
+  }
+
+  String _nodeKind(Map<String, dynamic> n) {
+    return ((n['entity_type'] ?? n['kind']) ?? 'node').toString();
+  }
+
+  String _alphaBucket(String label) {
+    final s = label.trim();
+    if (s.isEmpty) return 'Others';
+    final ch = s[0].toUpperCase();
+    final code = ch.codeUnitAt(0);
+    if (code >= 65 && code <= 90) return ch;
+    return 'Others';
+  }
+
+  List<Map<String, dynamic>> _connectedEdges(String nodeId) {
+    return _graphEdges.where((e) {
+      final s = (e['source'] ?? '').toString();
+      final t = (e['target'] ?? '').toString();
+      return s == nodeId || t == nodeId;
+    }).toList();
+  }
+
+  Widget _buildWikiIndexPanel(BuildContext context, ShellTokens t, ThemeData theme) {
+    final all = _sortedWikiNodes();
+
+    final bucketed = <String, List<Map<String, dynamic>>>{};
+    for (final n in all) {
+      final bucket = _alphaBucket(_nodeLabel(n));
+      bucketed.putIfAbsent(bucket, () => []).add(n);
+    }
+    final bucketKeys = bucketed.keys.toList()..sort();
+    if (bucketKeys.remove('Others')) bucketKeys.add('Others');
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+      padding: const EdgeInsets.fromLTRB(0, 0, 0, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            _searchQuery.isEmpty ? 'top nodes' : 'search results (${_searchResults.length})',
+            _searchQuery.isEmpty ? 'wiki index' : 'wiki search',
             style: theme.textTheme.bodySmall?.copyWith(color: t.fgSecondary),
           ),
           const SizedBox(height: 6),
@@ -1144,121 +964,182 @@ class _KnowledgeDialogState extends ConsumerState<KnowledgeDialog> {
                 borderRadius: kShellBorderRadiusSm,
               ),
               child: ListView.builder(
-                itemCount: _searchResults.length,
+                itemCount: bucketKeys.length,
                 itemBuilder: (context, index) {
-                  final item = _searchResults[index];
-                  final id = (item['id'] ?? '').toString();
-                  final isSelected = id == _selectedNodeId;
-                  return GestureDetector(
-                    onTap: () => _selectNodeFromResult(id),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-                      decoration: BoxDecoration(
-                        border: Border(
-                          bottom: BorderSide(color: t.border, width: 0.5),
+                  final bucket = bucketKeys[index];
+                  final items = bucketed[bucket] ?? const [];
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '$bucket (${items.length})',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: t.fgMuted,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
-                        color: isSelected
-                            ? t.accentPrimary.withOpacity(0.12)
-                            : Colors.transparent,
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            (item['label'] ?? id).toString(),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: isSelected ? t.fgPrimary : t.fgSecondary,
+                        const SizedBox(height: 4),
+                        ...items.map((n) {
+                          final id = (n['id'] ?? n['identity'] ?? '').toString();
+                          final isSelected = id == _selectedNodeId;
+                          return GestureDetector(
+                            onTap: () => _selectNodeFromResult(id),
+                            child: Container(
+                              key: _wikiItemKey(id),
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+                              margin: const EdgeInsets.only(bottom: 2),
+                              color: isSelected
+                                  ? t.accentPrimary.withOpacity(0.12)
+                                  : Colors.transparent,
+                              child: Text(
+                                _nodeLabel(n),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: isSelected ? t.fgPrimary : t.fgSecondary,
+                                ),
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 1),
-                          Text(
-                            '${item['kind'] ?? 'node'} · score ${(item['score'] as num?)?.toStringAsFixed(0) ?? '0'} · deg ${item['degree'] ?? 0}',
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: t.fgMuted,
-                              fontSize: 9,
-                            ),
-                          ),
-                        ],
-                      ),
+                          );
+                        }),
+                      ],
                     ),
                   );
                 },
               ),
             ),
           ),
-          const SizedBox(height: 8),
-          Text(
-            'node inspector',
-            style: theme.textTheme.bodySmall?.copyWith(color: t.fgSecondary),
-          ),
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: [
-              _presetChip(context, t, theme, 'speed', onTap: () {
-                setState(() {
-                  _maxDepth = 2;
-                  _maxNodes = 250;
-                });
-                _load();
-              }),
-              _presetChip(context, t, theme, 'detail', onTap: () {
-                setState(() {
-                  _maxDepth = 4;
-                  _maxNodes = 1000;
-                });
-                _load();
-              }),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Container(
-            width: double.infinity,
-            constraints: const BoxConstraints(minHeight: 130),
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              border: Border.all(color: t.border, width: 0.5),
-              borderRadius: kShellBorderRadiusSm,
-              color: t.surfaceCard,
-            ),
-            child: selectedNode == null
-                ? Text(
-                    'select a search result to inspect',
-                    style: theme.textTheme.labelSmall?.copyWith(color: t.fgMuted),
-                  )
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      SelectableText(
-                        label,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: t.fgPrimary,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '$kind · ${(selectedNode['id'] ?? '').toString()}',
-                        style: theme.textTheme.labelSmall?.copyWith(color: t.fgMuted),
-                      ),
-                      if (preview.isNotEmpty) ...[
-                        const SizedBox(height: 6),
-                        SelectableText(
-                          preview,
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: t.fgSecondary,
-                            height: 1.4,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-          ),
         ],
       ),
+    );
+  }
+
+  Widget _buildDetailsPanel(
+    BuildContext context,
+    ShellTokens t,
+    ThemeData theme,
+    Map<String, dynamic>? selectedNode,
+  ) {
+    final preview = selectedNode == null ? '' : _nodePreview(selectedNode);
+    final kind = selectedNode == null ? 'node' : _nodeKind(selectedNode);
+    final label = selectedNode == null ? '' : _nodeLabel(selectedNode);
+    final selectedId = (selectedNode?['id'] ?? selectedNode?['identity'] ?? '').toString();
+    final linkages = selectedId.isEmpty ? const <Map<String, dynamic>>[] : _connectedEdges(selectedId);
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        border: Border.all(color: t.border, width: 0.5),
+        borderRadius: kShellBorderRadiusSm,
+        color: t.surfaceCard,
+      ),
+      child: selectedNode == null
+          ? Text(
+              'select an entity from wiki index',
+              style: theme.textTheme.labelSmall?.copyWith(color: t.fgMuted),
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SelectableText(
+                  label,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: t.fgPrimary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '$kind · $selectedId',
+                  style: theme.textTheme.labelSmall?.copyWith(color: t.fgMuted),
+                ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (preview.isNotEmpty)
+                          SelectableText(
+                            preview,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: t.fgSecondary,
+                              height: 1.4,
+                            ),
+                          ),
+                        if (linkages.isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          Text(
+                            'related info (${linkages.length})',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: t.fgMuted,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          ...linkages.take(24).map((e) {
+                            final src = (e['source'] ?? '').toString();
+                            final tgt = (e['target'] ?? '').toString();
+                            final relatedId = src == selectedId ? tgt : src;
+                            final relatedNode = _graphNodes.cast<Map<String, dynamic>?>().firstWhere(
+                                  (n) =>
+                                      (n?['id'] ?? n?['identity'] ?? '').toString() == relatedId,
+                                  orElse: () => null,
+                                );
+                            final relatedLabel = relatedNode == null
+                                ? relatedId
+                                : _nodeLabel(relatedNode);
+                            final props =
+                                Map<String, dynamic>.from((e['properties'] as Map?) ?? const {});
+                            final desc = (props['description'] ?? '').toString();
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 6),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  GestureDetector(
+                                    onTap: relatedId.isEmpty ? null : () => _selectNodeFromResult(relatedId),
+                                    child: MouseRegion(
+                                      cursor: relatedId.isEmpty
+                                          ? SystemMouseCursors.basic
+                                          : SystemMouseCursors.click,
+                                      child: Text(
+                                        relatedLabel,
+                                        style: theme.textTheme.labelSmall?.copyWith(
+                                          color: t.accentPrimary,
+                                          decoration: TextDecoration.underline,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    '$src -> $tgt',
+                                    style: theme.textTheme.labelSmall?.copyWith(color: t.fgSecondary),
+                                  ),
+                                  if (desc.isNotEmpty)
+                                    Text(
+                                      desc,
+                                      maxLines: 3,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: theme.textTheme.labelSmall?.copyWith(
+                                        color: t.fgMuted,
+                                        fontSize: 10,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            );
+                          }),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
     );
   }
 
@@ -1393,11 +1274,15 @@ class _KnowledgeDialogState extends ConsumerState<KnowledgeDialog> {
 class _KnowledgeGraphCanvas extends StatefulWidget {
   final List<Map<String, dynamic>> nodes;
   final List<Map<String, dynamic>> edges;
+  final String? selectedNodeId;
+  final ValueChanged<String> onNodeTap;
   final bool isTruncated;
 
   const _KnowledgeGraphCanvas({
     required this.nodes,
     required this.edges,
+    required this.selectedNodeId,
+    required this.onNodeTap,
     this.isTruncated = false,
   });
 
@@ -1406,77 +1291,75 @@ class _KnowledgeGraphCanvas extends StatefulWidget {
 }
 
 class _KnowledgeGraphCanvasState extends State<_KnowledgeGraphCanvas> {
-  late ForceGraphController _controller;
+  static const int _maxRelatedNodes = 14;
 
-  @override
-  void initState() {
-    super.initState();
-    _controller = _buildController();
+  String _nodeId(Map<String, dynamic> node) {
+    return (node['id'] ?? node['identity'] ?? '').toString();
   }
 
-  @override
-  void didUpdateWidget(covariant _KnowledgeGraphCanvas oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.nodes != widget.nodes || oldWidget.edges != widget.edges) {
-      _controller = _buildController();
+  String _nodeLabel(Map<String, dynamic> node) {
+    return (((node['labels'] as List?)?.first) ?? node['label'] ?? node['id'] ?? '')
+        .toString();
+  }
+
+  String _nodeKind(Map<String, dynamic> node) {
+    return ((node['entity_type'] ?? node['kind']) ?? 'node').toString();
+  }
+
+  String _nodePreview(Map<String, dynamic> node) {
+    return ((node['properties'] as Map?)?['description'] ??
+            (node['metadata'] as Map?)?['preview'] ??
+            '')
+        .toString();
+  }
+
+  ({Map<String, dynamic>? center, List<Map<String, dynamic>> related, List<Map<String, dynamic>> edges, int extraCount})
+      _buildEgoGraph() {
+    final nodeById = <String, Map<String, dynamic>>{};
+    for (final n in widget.nodes) {
+      final id = _nodeId(n);
+      if (id.isNotEmpty) nodeById[id] = n;
     }
-  }
 
-  ForceGraphController _buildController() {
-    final forceNodes = _toForceGraphNodes(widget.nodes, widget.edges);
-    return ForceGraphController(nodes: forceNodes);
-  }
-
-  List<ForceGraphNodeData> _toForceGraphNodes(
-    List<Map<String, dynamic>> nodes,
-    List<Map<String, dynamic>> edges,
-  ) {
-    final nodeMap = <String, Map<String, dynamic>>{};
-    for (final n in nodes) {
-      final id = (n['id'] ?? n['identity'] ?? '').toString();
-      if (id.isNotEmpty) nodeMap[id] = Map<String, dynamic>.from(n);
+    final centerId = widget.selectedNodeId != null && nodeById.containsKey(widget.selectedNodeId)
+        ? widget.selectedNodeId!
+        : (widget.nodes.isNotEmpty ? _nodeId(widget.nodes.first) : '');
+    if (centerId.isEmpty || !nodeById.containsKey(centerId)) {
+      return (center: null, related: const [], edges: const [], extraCount: 0);
     }
-    for (final e in edges) {
-      final src = (e['source'] ?? '').toString();
-      final tgt = (e['target'] ?? '').toString();
-      if (src.isNotEmpty && !nodeMap.containsKey(src)) {
-        nodeMap[src] = {'id': src, 'label': src, 'kind': 'unknown'};
+
+    final neighborIds = <String>{};
+    final relevantEdges = <Map<String, dynamic>>[];
+    for (final edge in widget.edges) {
+      final src = (edge['source'] ?? '').toString();
+      final tgt = (edge['target'] ?? '').toString();
+      if (src == centerId || tgt == centerId) {
+        relevantEdges.add(edge);
+        if (src == centerId && tgt.isNotEmpty && nodeById.containsKey(tgt)) neighborIds.add(tgt);
+        if (tgt == centerId && src.isNotEmpty && nodeById.containsKey(src)) neighborIds.add(src);
       }
-      if (tgt.isNotEmpty && !nodeMap.containsKey(tgt)) {
-        nodeMap[tgt] = {'id': tgt, 'label': tgt, 'kind': 'unknown'};
-      }
     }
 
-    final outgoing = <String, List<ForceGraphEdgeData>>{};
-    for (final e in edges) {
-      final src = (e['source'] ?? '').toString();
-      final tgt = (e['target'] ?? '').toString();
-      if (src.isEmpty || tgt.isEmpty) continue;
-      outgoing.putIfAbsent(src, () => []).add(
-            ForceGraphEdgeData.from(
-              source: src,
-              target: tgt,
-              similarity: 1.0,
-              data: e,
-            ),
-          );
-    }
-
-    return nodeMap.entries.map((entry) {
-      final id = entry.key;
-      final raw = entry.value;
-      final kind = ((raw['entity_type'] ?? raw['kind']) ?? 'node').toString();
-      final label = ((raw['labels'] as List?)?.first ?? raw['label'] ?? raw['id'] ?? id)
-          .toString();
-      return ForceGraphNodeData.from(
-        id: id,
-        edges: outgoing[id] ?? [],
-        title: label,
-        data: raw,
-        removable: false,
-        radius: kind == 'chunk' ? 0.15 : 0.2,
-      );
+    final sortedNeighborIds = neighborIds.toList()
+      ..sort((a, b) => _nodeLabel(nodeById[a]!).toLowerCase().compareTo(_nodeLabel(nodeById[b]!).toLowerCase()));
+    final keptNeighborIds = sortedNeighborIds.take(_maxRelatedNodes).toSet();
+    final related = sortedNeighborIds.take(_maxRelatedNodes).map((id) => nodeById[id]!).toList();
+    final filteredEdges = relevantEdges.where((edge) {
+      final src = (edge['source'] ?? '').toString();
+      final tgt = (edge['target'] ?? '').toString();
+      return src == centerId
+          ? keptNeighborIds.contains(tgt)
+          : tgt == centerId
+              ? keptNeighborIds.contains(src)
+              : false;
     }).toList();
+
+    return (
+      center: nodeById[centerId],
+      related: related,
+      edges: filteredEdges,
+      extraCount: math.max(0, sortedNeighborIds.length - _maxRelatedNodes),
+    );
   }
 
   @override
@@ -1504,74 +1387,196 @@ class _KnowledgeGraphCanvasState extends State<_KnowledgeGraphCanvas> {
       );
     }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (widget.isTruncated)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-            margin: const EdgeInsets.only(bottom: 8),
-            decoration: BoxDecoration(
-              color: t.statusWarning.withOpacity(0.15),
-              border: Border.all(color: t.statusWarning.withOpacity(0.4), width: 0.5),
-              borderRadius: kShellBorderRadiusSm,
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.info_outline, size: 13, color: t.statusWarning),
-                const SizedBox(width: 6),
-                Text(
-                  'graph truncated — raise max nodes for broader context',
-                  style: theme.textTheme.labelSmall?.copyWith(color: t.statusWarning),
-                ),
-              ],
-            ),
-          ),
-        Expanded(
-          child: ClipRRect(
+    final ego = _buildEgoGraph();
+    final center = ego.center;
+    if (center == null) {
+      return Center(
+        child: Text(
+          'select an entity to view graph',
+          style: theme.textTheme.bodyMedium?.copyWith(color: t.fgMuted),
+        ),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final height = constraints.maxHeight;
+        final centerPos = Offset(width * 0.32, height * 0.5);
+        final related = ego.related;
+        final positions = <String, Offset>{
+          _nodeId(center): centerPos,
+        };
+        final count = related.length;
+        for (var i = 0; i < count; i++) {
+          final angle = count == 1 ? 0.0 : (-math.pi / 2) + ((i / math.max(1, count - 1)) * math.pi);
+          final x = width * 0.72 + math.cos(angle) * width * 0.16;
+          final y = height * 0.5 + math.sin(angle) * height * 0.34;
+          positions[_nodeId(related[i])] = Offset(x, y);
+        }
+
+        return Container(
+          decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(kShellRadius),
-            child: ForceGraphWidget(
-              controller: _controller,
-              showControlBar: true,
-              defaultControlBarForegroundColor: t.fgPrimary,
-              defaultControlBarBackgroundColor: t.surfaceCard,
-              nodeTooltipBuilder: (context, node) {
-                final raw = node.data.data as Map<String, dynamic>?;
-                if (raw == null) return Text(node.data.title);
-                final kind = ((raw['entity_type'] ?? raw['kind']) ?? 'node').toString();
-                final label =
-                    ((raw['labels'] as List?)?.first ?? raw['label'] ?? raw['id'] ?? '').toString();
-                final preview = ((raw['properties'] as Map?)?['description'] ??
-                        (raw['metadata'] as Map?)?['preview'] ??
-                        '')
-                    .toString();
-                return Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('$kind: $label', style: const TextStyle(fontWeight: FontWeight.w600)),
-                      if (preview.isNotEmpty) ...[
-                        const SizedBox(height: 4),
-                        Text(preview, style: TextStyle(fontSize: 11, color: t.fgSecondary)),
-                      ],
-                    ],
+            border: Border.all(color: t.border, width: 0.5),
+            color: t.surfaceCard,
+          ),
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: CustomPaint(
+                  painter: _KnowledgeGraphPainter(
+                    positions: positions,
+                    edges: ego.edges,
+                    selectedNodeId: widget.selectedNodeId,
+                    borderColor: t.border,
+                    accentColor: t.accentPrimary,
+                    mutedColor: t.fgMuted,
+                  ),
+                ),
+              ),
+              ...positions.entries.map((entry) {
+                final id = entry.key;
+                final node = id == _nodeId(center)
+                    ? center
+                    : related.firstWhere((n) => _nodeId(n) == id, orElse: () => {'id': id});
+                final pos = entry.value;
+                final selected = id == widget.selectedNodeId;
+                final isCenter = id == _nodeId(center);
+                final widthCard = isCenter ? 210.0 : 170.0;
+                final heightCard = isCenter ? 82.0 : 64.0;
+                return Positioned(
+                  left: (pos.dx - widthCard / 2).clamp(8.0, math.max(8.0, width - widthCard - 8)),
+                  top: (pos.dy - heightCard / 2).clamp(8.0, math.max(8.0, height - heightCard - 8)),
+                  width: widthCard,
+                  height: heightCard,
+                  child: GestureDetector(
+                    onTap: () => widget.onNodeTap(id),
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: selected ? t.accentPrimary.withOpacity(0.12) : t.surfaceBase,
+                        border: Border.all(
+                          color: selected || isCenter ? t.accentPrimary : t.border,
+                          width: 0.8,
+                        ),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            _nodeLabel(node),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: t.fgPrimary,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _nodeKind(node),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: t.fgMuted,
+                              fontSize: 10,
+                            ),
+                          ),
+                          if (_nodePreview(node).isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              _nodePreview(node),
+                              maxLines: isCenter ? 2 : 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: t.fgSecondary,
+                                fontSize: 10,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
                   ),
                 );
-              },
-              edgeTooltipBuilder: (context, edge) {
-                final raw = edge.data.data as Map<String, dynamic>?;
-                final kind = raw?['kind'] ?? 'link';
-                return Padding(
-                  padding: const EdgeInsets.all(6),
-                  child: Text('${edge.data.source} → ${edge.data.target} ($kind)'),
-                );
-              },
-            ),
+              }),
+              Positioned(
+                left: 12,
+                top: 12,
+                child: Text(
+                  ego.extraCount > 0
+                      ? '${related.length} related shown · +${ego.extraCount} more'
+                      : '${related.length} related items',
+                  style: theme.textTheme.labelSmall?.copyWith(color: t.fgMuted),
+                ),
+              ),
+              if (widget.isTruncated)
+                Positioned(
+                  right: 12,
+                  top: 12,
+                  child: Text(
+                    'graph slice',
+                    style: theme.textTheme.labelSmall?.copyWith(color: t.statusWarning),
+                  ),
+                ),
+            ],
           ),
-        ),
-      ],
+        );
+      },
     );
+  }
+}
+
+class _KnowledgeGraphPainter extends CustomPainter {
+  final Map<String, Offset> positions;
+  final List<Map<String, dynamic>> edges;
+  final String? selectedNodeId;
+  final Color borderColor;
+  final Color accentColor;
+  final Color mutedColor;
+
+  const _KnowledgeGraphPainter({
+    required this.positions,
+    required this.edges,
+    required this.selectedNodeId,
+    required this.borderColor,
+    required this.accentColor,
+    required this.mutedColor,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final basePaint = Paint()
+      ..color = borderColor.withOpacity(0.55)
+      ..strokeWidth = 1
+      ..style = PaintingStyle.stroke;
+    final selectedPaint = Paint()
+      ..color = accentColor.withOpacity(0.8)
+      ..strokeWidth = 1.6
+      ..style = PaintingStyle.stroke;
+
+    for (final edge in edges) {
+      final src = (edge['source'] ?? '').toString();
+      final tgt = (edge['target'] ?? '').toString();
+      final a = positions[src];
+      final b = positions[tgt];
+      if (a == null || b == null) continue;
+      final mid = Offset((a.dx + b.dx) / 2, (a.dy + b.dy) / 2 - 18);
+      final path = Path()
+        ..moveTo(a.dx, a.dy)
+        ..quadraticBezierTo(mid.dx, mid.dy, b.dx, b.dy);
+      final selected = src == selectedNodeId || tgt == selectedNodeId;
+      canvas.drawPath(path, selected ? selectedPaint : basePaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _KnowledgeGraphPainter oldDelegate) {
+    return oldDelegate.positions != positions ||
+        oldDelegate.edges != edges ||
+        oldDelegate.selectedNodeId != selectedNodeId;
   }
 }
