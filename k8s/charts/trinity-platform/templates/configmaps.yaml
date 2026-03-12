@@ -139,6 +139,15 @@ data:
                 try_files $uri =404;
             }
 
+            # Safari home screen probes; avoid noisy 404s.
+            location = /apple-touch-icon.png {
+                return 204;
+            }
+
+            location = /apple-touch-icon-precomposed.png {
+                return 204;
+            }
+
             location ~* \.(js|wasm|map)$ {
                 add_header X-Content-Type-Options "nosniff" always;
                 add_header Cache-Control "public, max-age=31536000, immutable";
@@ -155,6 +164,8 @@ data:
             location /auth/ {
                 limit_req zone=auth_limit burst=20 nodelay;
                 client_max_body_size 10m;
+                add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+                add_header Pragma "no-cache" always;
                 proxy_pass http://auth_service;
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;

@@ -12,6 +12,16 @@ const usersRoutes = require('./routes/users');
 const app = express();
 const PORT = parseInt(process.env.AUTH_SERVICE_PORT || '18791', 10);
 app.set('trust proxy', 1);
+app.set('etag', false);
+
+// Prevent browser/proxy caching for auth APIs to avoid stale 304 responses
+// during session bootstrap (notably on Safari reload flows).
+app.use('/auth', (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
 
 // Security: helmet for standard security headers (API-only service, strict CSP)
 app.use(helmet({

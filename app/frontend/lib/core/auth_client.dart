@@ -178,6 +178,7 @@ class AuthClient extends ChangeNotifier {
   /// Status of the user's assigned OpenClaw instances.
   OpenClawStatus _openClawStatus = OpenClawStatus.unknown;
   OpenClawStatus get openClawStatus => _openClawStatus;
+  int _openClawFetchSeq = 0;
 
   /// Human-readable error when [openClawStatus] is [OpenClawStatus.error].
   String? _openClawError;
@@ -220,6 +221,25 @@ class AuthClient extends ChangeNotifier {
         isGuest: role == 'guest',
         activeOpenClawId: activeOpenClawId,
       );
+
+      // Safari can occasionally stall initial /auth/openclaws hydration after a
+      // hard reload even with a valid persisted selection. Optimistically mark
+      // the persisted OpenClaw as active so shell routing can proceed while the
+      // authoritative assignment list refreshes in background.
+      if (activeOpenClawId != null && activeOpenClawId.isNotEmpty) {
+        _state = _state.copyWith(
+          openclaws: [
+            OpenClawInfo(
+              id: activeOpenClawId,
+              name: 'openclaw',
+              status: 'unknown',
+              ready: true,
+            ),
+          ],
+        );
+        _openClawStatus = OpenClawStatus.ready;
+      }
+
       notifyListeners();
 
       // Restored session — fetch the user's assigned OpenClaw instances.
@@ -316,10 +336,16 @@ class AuthClient extends ChangeNotifier {
   }
 
   Future<void> _resolveSession(String accessToken, {String? email}) async {
-    final uri = Uri.parse('$authServiceBaseUrl/auth/me');
+    final uri = Uri.parse('$authServiceBaseUrl/auth/me').replace(
+      queryParameters: {
+        'ts': DateTime.now().millisecondsSinceEpoch.toString(),
+      },
+    );
     final request = html.HttpRequest();
     request.open('GET', uri.toString());
     request.setRequestHeader('Authorization', 'Bearer $accessToken');
+    request.setRequestHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    request.setRequestHeader('Pragma', 'no-cache');
 
     final completer = _createRequestCompleter(request);
     request.send();
@@ -369,31 +395,54 @@ class AuthClient extends ChangeNotifier {
       return;
     }
 
-    _openClawStatus = OpenClawStatus.loading;
+    final seq = ++_openClawFetchSeq;
+    final hasFallbackOpenClaw =
+        _state.activeOpenClawId != null && _state.openclaws.isNotEmpty;
+
+    // Keep reconnect path non-blocking when a persisted OpenClaw is already
+    // known locally. We still refresh assignments in the background.
+    _openClawStatus =
+        hasFallbackOpenClaw ? OpenClawStatus.ready : OpenClawStatus.loading;
     _openClawError = null;
     notifyListeners();
 
     try {
-      final uri = Uri.parse('$authServiceBaseUrl/auth/openclaws').replace(
-        queryParameters: {
-          'ts': DateTime.now().millisecondsSinceEpoch.toString(),
-        },
-      );
-      final request = html.HttpRequest();
-      request.open('GET', uri.toString());
-      request.setRequestHeader('Authorization', 'Bearer ${_state.token}');
-      request.setRequestHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      request.setRequestHeader('Pragma', 'no-cache');
+      Future<String> requestOpenClaws() async {
+        final uri = Uri.parse('$authServiceBaseUrl/auth/openclaws').replace(
+          queryParameters: {
+            'ts': DateTime.now().millisecondsSinceEpoch.toString(),
+          },
+        );
+        final request = html.HttpRequest();
+        request.open('GET', uri.toString());
+        request.setRequestHeader('Authorization', 'Bearer ${_state.token}');
+        request.setRequestHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        request.setRequestHeader('Pragma', 'no-cache');
 
-      final completer = _createRequestCompleter(request);
-      request.send();
+        final completer = _createRequestCompleter(request);
+        request.send();
 
-      final responseText = await completer.timeout(
-        const Duration(seconds: 15),
-        onTimeout: () {
-          throw Exception('Request timed out after 15 seconds');
-        },
-      );
+        return completer.timeout(
+          const Duration(seconds: 10),
+          onTimeout: () {
+            throw Exception('Request timed out after 10 seconds');
+          },
+        );
+      }
+
+      String responseText;
+      try {
+        responseText = await requestOpenClaws();
+      } catch (firstError) {
+        // One quick retry for transient Safari/network hiccups.
+        if (kDebugMode) {
+          debugPrint('[Auth] openclaws first attempt failed, retrying: $firstError');
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        responseText = await requestOpenClaws();
+      }
+
+      if (seq != _openClawFetchSeq) return;
       final decoded = jsonDecode(responseText);
       // The endpoint returns either a plain array or {"openclaws": [...]}
       final List rawList;
@@ -409,6 +458,7 @@ class AuthClient extends ChangeNotifier {
           .toList();
 
       if (openclaws.isEmpty) {
+        if (seq != _openClawFetchSeq) return;
         _state = _state.copyWith(
           openclaws: openclaws,
           clearActiveOpenClawId: true,
@@ -442,8 +492,14 @@ class AuthClient extends ChangeNotifier {
         debugPrint('[Auth] Fetched ${openclaws.length} OpenClaw(s), active: $selectedId');
       }
     } catch (e) {
-      _openClawStatus = OpenClawStatus.error;
-      _openClawError = 'Failed to fetch OpenClaws: $e';
+      if (seq != _openClawFetchSeq) return;
+      if (hasFallbackOpenClaw) {
+        _openClawStatus = OpenClawStatus.ready;
+        _openClawError = 'OpenClaw refresh delayed: $e';
+      } else {
+        _openClawStatus = OpenClawStatus.error;
+        _openClawError = 'Failed to fetch OpenClaws: $e';
+      }
       notifyListeners();
       if (kDebugMode) debugPrint('[Auth] fetchUserOpenClaws error: $e');
     }
