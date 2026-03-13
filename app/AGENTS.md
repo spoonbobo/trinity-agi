@@ -582,7 +582,7 @@ docker compose -f app/docker-compose.yml up -d terminal-proxy auth-service
 docker restart trinity-nginx trinity-openclaw
 ```
 
-Then hard-refresh browser: Ctrl+Shift+R.
+Normal reloads should pick up new frontend builds; no hard-refresh step is required.
 
 ---
 

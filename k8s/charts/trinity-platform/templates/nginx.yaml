@@ -16,6 +16,8 @@ spec:
     metadata:
       labels:
         {{- include "trinity.componentLabels" (dict "component" "nginx" "Release" .Release "Chart" .Chart) | nindent 8 }}
+      annotations:
+        checksum/nginx-config: {{ include (print $.Template.BasePath "/configmaps.yaml") . | sha256sum }}
     spec:
       containers:
         - name: nginx
