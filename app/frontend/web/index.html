@@ -55,6 +55,17 @@
     </svg>
     <span>TRINITY</span>
   </div>
+  <script>
+    // Unregister any previously-installed Flutter service worker.
+    // The build no longer generates one (--pwa-strategy=none), but existing
+    // users may still have a stale SW cached in their browser that intercepts
+    // fetches and serves outdated assets. This is a one-time cleanup.
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function(registrations) {
+        for (var r of registrations) { r.unregister(); }
+      });
+    }
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

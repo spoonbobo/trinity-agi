@@ -23,7 +23,15 @@ Browser -> GoTrue (email/password or Keycloak OIDC) -> JWT
        -> DB: ensureUserRole() -> effective_permissions() recursive CTE
        -> Response: {role, permissions[]}
        -> Frontend stores in localStorage + Riverpod AuthState
+       -> GET /auth/openclaws -> orchestrator (3s timeout) -> enriched list
+       -> Auto-select first ready instance -> connect gateway WebSocket
 ```
+
+**Orchestrator dependency:** The auth-service makes outbound HTTP calls to the gateway-orchestrator (`ORCHESTRATOR_URL`) for OpenClaw lifecycle operations. All orchestrator calls use `AbortSignal.timeout()` to prevent hangs:
+- `fetchAssignedOpenClawsForUser()`: 3s timeout
+- Status enrichment per-claw: 2.5s timeout
+
+If the orchestrator is down, `/auth/openclaws` will fail after 3s instead of hanging indefinitely.
 
 **Guest flow:** `POST /auth/guest` issues a limited JWT (1hr TTL, role=guest, safe-tier permissions).
 
@@ -94,6 +102,24 @@ Stack: Express.js, jsonwebtoken, pg, js-yaml
 | GET | /auth/users/roles/permissions | Bearer JWT | users.list | Role-permission matrix |
 | PUT | /auth/users/roles/:role/permissions | Bearer JWT | users.manage | Update role permissions |
 
+#### OpenClaw Management Endpoints
+
+| Method | Path | Auth | Permission | Purpose |
+|--------|------|------|------------|---------|
+| GET | /auth/openclaws | Bearer JWT | none (non-guest) | List assigned OpenClaw instances (calls orchestrator, 3s timeout) |
+| GET | /auth/openclaws/:id/status | Bearer JWT | access check | OpenClaw pod status |
+| GET | /auth/openclaws/:id/config | Bearer JWT | access check | Get OpenClaw config (openclaw.json) |
+| PATCH | /auth/openclaws/:id/config | Bearer JWT | access check | Update OpenClaw config |
+| GET | /auth/openclaws/:id/delegation-token | Bearer JWT | access check | Get delegation token |
+| POST | /auth/openclaws/create | Bearer JWT | admin+ | Create new OpenClaw instance |
+| DELETE | /auth/openclaws/:id | Bearer JWT | admin+ | Delete OpenClaw instance |
+| POST | /auth/openclaws/:id/assign | Bearer JWT | admin+ | Assign OpenClaw to user |
+| POST | /auth/openclaws/:id/unassign | Bearer JWT | admin+ | Unassign OpenClaw from user |
+| GET | /auth/openclaws/fleet/sessions | Bearer JWT | admin+ | Fleet-wide session overview |
+| GET | /auth/openclaws/fleet/health | Bearer JWT | admin+ | Fleet-wide health overview |
+
+Access check: user must own the OpenClaw (via orchestrator lookup) or be admin+.
+
 ### Key rbac.js Functions
 
 | Function | Purpose |
@@ -109,6 +135,13 @@ Stack: Express.js, jsonwebtoken, pg, js-yaml
 | `setRolePermissions(roleName, actions)` | Transactional replace of role-permission bindings |
 | `writeAuditLog(...)` | Insert audit record |
 | `getAuditLog(limit, offset)` | Paginated audit query |
+
+### Key auth.js Functions (OpenClaw routes)
+
+| Function | Purpose |
+|----------|---------|
+| `fetchAssignedOpenClawsForUser(userId)` | Calls orchestrator `GET /users/:id/openclaws` with 3s `AbortSignal.timeout` |
+| `assertOpenClawAccess(req, openclawId)` | Verifies user owns the claw or is admin+; throws 401/403 |
 
 ### Audit Events
 
@@ -155,6 +188,8 @@ On auth-service startup (`ensureDefaultSuperadmin()`):
 | POSTGRES_HOST | supabase-db | DB host |
 | POSTGRES_DB | supabase | DB name |
 | OPENCLAW_GATEWAY_TOKEN | (from .env) | For issuing gateway session tokens |
+| ORCHESTRATOR_URL | http://gateway-orchestrator:18801 | Gateway orchestrator base URL (outbound calls) |
+| ORCHESTRATOR_SERVICE_TOKEN | (from Vault) | Bearer token for orchestrator API calls |
 
 ## Common Tasks
 

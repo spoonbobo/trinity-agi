@@ -1,8 +1,8 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/http_utils.dart';
 import '../../core/theme.dart';
 import '../../core/providers.dart' show terminalClientProvider;
 import '../../main.dart' show authClientProvider;
@@ -53,17 +53,7 @@ class _AdminSessionsTabState extends ConsumerState<AdminSessionsTab> {
       final request = html.HttpRequest();
       request.open('GET', url);
       request.setRequestHeader('Authorization', 'Bearer $_token');
-      final completer = Completer<String>();
-      request.onLoad.listen((_) {
-        if (request.status! >= 200 && request.status! < 300) {
-          completer.complete(request.responseText ?? '{}');
-        } else {
-          completer.completeError('HTTP ${request.status}: ${request.responseText}');
-        }
-      });
-      request.onError.listen((_) => completer.completeError('request failed'));
-      request.send();
-      final raw = await completer.future;
+      final raw = await safeXhr(request);
       final parsed = jsonDecode(raw) as Map<String, dynamic>;
       final claws = (parsed['claws'] as List?)
           ?.map((e) => Map<String, dynamic>.from(e as Map))

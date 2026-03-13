@@ -240,7 +240,11 @@ Browser -> GoTrue (email/password or Keycloak OIDC) -> JWT
        -> DB: ensureUserRole() -> effective_permissions() recursive CTE
        -> Response: {role, permissions[]}
        -> Frontend stores in localStorage + Riverpod AuthState
+       -> GET /auth/openclaws -> fetch assigned OpenClaw instances (3s timeout)
+       -> Auto-select first ready instance -> connect gateway WebSocket
 ```
+
+The OpenClaw list is fetched fresh from the server on every page load -- no localStorage caching. The HTTP response from `GET /auth/openclaws` is the single source of truth for instance selection.
 
 Guest flow: `POST /auth/guest` issues a limited JWT (1hr, role=guest, hardcoded safe permissions).
 
@@ -258,6 +262,17 @@ Guest flow: `POST /auth/guest` issues a limited JWT (1hr, role=guest, hardcoded 
 | GET | /auth/users/audit | audit.read | Paginated audit log |
 | GET | /auth/users/roles/permissions | users.list | Role-permission matrix |
 | PUT | /auth/users/roles/:role/permissions | users.manage | Update role permissions |
+| GET | /auth/openclaws | Bearer JWT | List user's assigned OpenClaw instances (3s orchestrator timeout) |
+| GET | /auth/openclaws/:id/status | Bearer JWT | OpenClaw pod status |
+| GET | /auth/openclaws/:id/config | Bearer JWT | Get OpenClaw config (openclaw.json) |
+| PATCH | /auth/openclaws/:id/config | Bearer JWT | Update OpenClaw config |
+| GET | /auth/openclaws/:id/delegation-token | Bearer JWT | Get delegation token for OpenClaw |
+| POST | /auth/openclaws/create | admin+ | Create new OpenClaw instance |
+| DELETE | /auth/openclaws/:id | admin+ | Delete OpenClaw instance |
+| POST | /auth/openclaws/:id/assign | admin+ | Assign OpenClaw to user |
+| POST | /auth/openclaws/:id/unassign | admin+ | Unassign OpenClaw from user |
+| GET | /auth/openclaws/fleet/sessions | admin+ | Fleet-wide session overview |
+| GET | /auth/openclaws/fleet/health | admin+ | Fleet-wide health overview |
 
 ---
 
@@ -373,6 +388,15 @@ MaterialApp (TrinityApp)
 | fontFamilyProvider | main.dart | StateProvider<AppFontFamily> |
 | languageProvider | main.dart | StateProvider<AppLanguage> |
 | toastProvider | core/toast_provider.dart | StateNotifierProvider |
+
+### Core Utilities
+
+| Utility | Location | Purpose |
+|---------|----------|---------|
+| `safeXhr()` | core/http_utils.dart | Safe XHR with `onLoad`/`onError`/`onAbort` + configurable timeout (default 10s) |
+| `safeHttpRequest()` | core/http_utils.dart | Timeout wrapper for `html.HttpRequest.request()` static helper |
+
+**MANDATORY: All browser HTTP requests MUST use `safeXhr()` or `safeHttpRequest()` from `core/http_utils.dart`.** Never create raw `html.HttpRequest` + manual `Completer` patterns. Never use `Future.delayed(Duration.zero)` to defer stream subscriptions. Never use `.onLoadEnd.first` for XHR. See `flutter-shell` skill for full rationale and anti-patterns.
 
 ### Services (Non-Riverpod Singletons)
 

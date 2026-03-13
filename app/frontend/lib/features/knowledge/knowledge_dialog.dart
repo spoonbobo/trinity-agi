@@ -6,6 +6,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/http_utils.dart';
 import '../../core/theme.dart';
 import '../../main.dart' show authClientProvider;
 
@@ -123,9 +124,26 @@ class _KnowledgeDialogState extends ConsumerState<KnowledgeDialog> {
     if (token == null || token.isEmpty || openclawId == null || openclawId.isEmpty) return;
 
     final picker = html.FileUploadInputElement()..accept = '.pdf,.docx,.txt,.md';
+    final pickerCompleter = Completer<html.File?>();
+    picker.onChange.first.then((_) {
+      if (!pickerCompleter.isCompleted) {
+        final file = picker.files?.isNotEmpty == true ? picker.files!.first : null;
+        pickerCompleter.complete(file);
+      }
+    });
+    // If the user cancels, onChange never fires on some browsers.
+    // Use a focus listener as a fallback to detect cancel.
+    html.window.onFocus.first.then((_) {
+      Future.delayed(const Duration(milliseconds: 300), () {
+        if (!pickerCompleter.isCompleted) pickerCompleter.complete(null);
+      });
+    });
     picker.click();
-    await picker.onChange.first;
-    final file = picker.files?.isNotEmpty == true ? picker.files!.first : null;
+    // Absolute safety net -- never block longer than 2 minutes.
+    final file = await pickerCompleter.future.timeout(
+      const Duration(minutes: 2),
+      onTimeout: () => null,
+    );
     if (file == null) return;
 
     setState(() {
@@ -411,35 +429,11 @@ class _KnowledgeDialogState extends ConsumerState<KnowledgeDialog> {
     }
   }
 
-  Future<String> _sendRequest(html.HttpRequest request) {
-    final completer = Completer<String>();
-    request.onLoad.listen((_) {
-      final status = request.status ?? 0;
-      if (status >= 200 && status < 300) {
-        completer.complete(request.responseText ?? '{}');
-      } else {
-        completer.completeError('HTTP $status: ${request.responseText}');
-      }
-    });
-    request.onError.listen((_) => completer.completeError('request failed'));
-    request.send();
-    return completer.future;
-  }
+  Future<String> _sendRequest(html.HttpRequest request) =>
+      safeXhr(request);
 
-  Future<String> _sendRequestWithBody(html.HttpRequest request, dynamic body) {
-    final completer = Completer<String>();
-    request.onLoad.listen((_) {
-      final status = request.status ?? 0;
-      if (status >= 200 && status < 300) {
-        completer.complete(request.responseText ?? '{}');
-      } else {
-        completer.completeError('HTTP $status: ${request.responseText}');
-      }
-    });
-    request.onError.listen((_) => completer.completeError('request failed'));
-    request.send(body);
-    return completer.future;
-  }
+  Future<String> _sendRequestWithBody(html.HttpRequest request, dynamic body) =>
+      safeXhr(request, body: body);
 
   List<Map<String, dynamic>> get _graphNodes {
     return (_graph?['nodes'] as List?)

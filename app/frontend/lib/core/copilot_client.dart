@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:html' as html;
 
+import 'http_utils.dart';
+
 class CopilotAction {
   final String type;
   final String label;
@@ -156,18 +158,8 @@ class CopilotClient {
       request.setRequestHeader('X-OpenClaw-Id', openclawId);
     }
 
-    final completer = Future<String>.delayed(Duration.zero, () async {
-      await request.onLoadEnd.first;
-      if (request.status != null &&
-          request.status! >= 200 &&
-          request.status! < 300) {
-        return request.responseText ?? '{}';
-      }
-      throw Exception('HTTP ${request.status}: ${request.responseText}');
-    });
-
-    request.send(body == null ? null : jsonEncode(body));
-    final responseText = await completer;
+    final responseText = await safeXhr(request,
+        body: body == null ? null : jsonEncode(body));
     if (responseText.trim().isEmpty) return {};
     return Map<String, dynamic>.from(jsonDecode(responseText) as Map);
   }

@@ -1,9 +1,9 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/http_utils.dart';
 import '../../core/theme.dart';
 import '../../core/toast_provider.dart';
 import '../../core/providers.dart' show terminalClientProvider;
@@ -105,17 +105,7 @@ class _AgentWorkspaceDialogState extends ConsumerState<AgentWorkspaceDialog> {
     request.open('GET', url);
     request.setRequestHeader('Authorization', 'Bearer $_token');
     request.setRequestHeader('Content-Type', 'application/json');
-    final completer = Completer<String>();
-    request.onLoad.listen((_) {
-      if (request.status! >= 200 && request.status! < 300) {
-        completer.complete(request.responseText ?? '{}');
-      } else {
-        completer.completeError('HTTP ${request.status}: ${request.responseText}');
-      }
-    });
-    request.onError.listen((_) => completer.completeError('request failed'));
-    request.send();
-    final raw = await completer.future;
+    final raw = await safeXhr(request);
     return jsonDecode(raw) as Map<String, dynamic>;
   }
 
@@ -129,17 +119,7 @@ class _AgentWorkspaceDialogState extends ConsumerState<AgentWorkspaceDialog> {
     request.open('PATCH', url);
     request.setRequestHeader('Authorization', 'Bearer $_token');
     request.setRequestHeader('Content-Type', 'application/json');
-    final completer = Completer<String>();
-    request.onLoad.listen((_) {
-      if (request.status! >= 200 && request.status! < 300) {
-        completer.complete(request.responseText ?? '{}');
-      } else {
-        completer.completeError('HTTP ${request.status}: ${request.responseText}');
-      }
-    });
-    request.onError.listen((_) => completer.completeError('request failed'));
-    request.send(jsonEncode({'config': config, 'restart': restart}));
-    await completer.future;
+    await safeXhr(request, body: jsonEncode({'config': config, 'restart': restart}));
   }
 
   /// The full config as last loaded from the API.
@@ -219,6 +199,7 @@ class _AgentWorkspaceDialogState extends ConsumerState<AgentWorkspaceDialog> {
         }
       }
 
+      if (!mounted) return;
       setState(() => _loading = false);
 
       // Also load memory for the selected agent
@@ -257,6 +238,7 @@ class _AgentWorkspaceDialogState extends ConsumerState<AgentWorkspaceDialog> {
 
   Future<void> _loadMemory({int retries = 1}) async {
     final client = ref.read(terminalClientProvider);
+    if (!mounted) return;
     setState(() { _memLoading = true; _memError = null; });
     try {
       // Ensure terminal proxy is connected and authenticated
@@ -269,8 +251,8 @@ class _AgentWorkspaceDialogState extends ConsumerState<AgentWorkspaceDialog> {
           waitMs += 200;
         }
       }
+      if (!mounted) return;
       if (!client.isAuthenticated) {
-        if (!mounted) return;
         setState(() { _memError = 'terminal proxy not authenticated'; });
         return;
       }

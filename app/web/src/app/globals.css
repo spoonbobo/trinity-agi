@@ -1,0 +1,231 @@
+@import 'tailwindcss';
+
+/*
+ * Trinity Shell Design Tokens — CSS Custom Properties
+ * 1:1 port from Flutter ShellTokens (core/theme.dart)
+ */
+
+/* ---------- Font faces ---------- */
+@font-face {
+  font-family: 'DM Sans';
+  src: url('/fonts/DMSans-Variable.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'DM Sans';
+  src: url('/fonts/DMSans-Italic-Variable.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Italic.ttf') format('truetype');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Noto Sans';
+  src: url('/fonts/NotoSans-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Noto Sans SC';
+  src: url('/fonts/NotoSansSC-Regular.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Noto Sans TC';
+  src: url('/fonts/NotoSansTC-Regular.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ---------- Dark theme tokens (default) ---------- */
+:root,
+[data-theme='dark'] {
+  --surface-base: #0A0A0A;
+  --surface-card: #141414;
+  --surface-code-inline: #1E1E1E;
+  --surface-elevated: #1A1A1A;
+
+  --border: #2A2A2A;
+  --border-primary-subtle: #1A3A2A;
+
+  --fg-primary: #D4D4D4;
+  --fg-secondary: #A3A3A3;
+  --fg-tertiary: #737373;
+  --fg-muted: #525252;
+  --fg-disabled: #404040;
+  --fg-placeholder: #525252;
+  --fg-hint: #404040;
+
+  --accent-primary: #6EE7B7;
+  --accent-primary-muted: #1A3A2A;
+  --accent-secondary: #7DD3FC;
+  --status-warning: #FCD34D;
+  --status-error: #F87171;
+
+  --shell-radius: 6px;
+  --shell-radius-sm: 4px;
+
+  color-scheme: dark;
+}
+
+/* ---------- Light theme tokens ---------- */
+[data-theme='light'] {
+  --surface-base: #F5F5F5;
+  --surface-card: #FFFFFF;
+  --surface-code-inline: #F0F0F0;
+  --surface-elevated: #FFFFFF;
+
+  --border: #E5E5E5;
+  --border-primary-subtle: #D1FAE5;
+
+  --fg-primary: #1A1A1A;
+  --fg-secondary: #525252;
+  --fg-tertiary: #737373;
+  --fg-muted: #A3A3A3;
+  --fg-disabled: #D4D4D4;
+  --fg-placeholder: #A3A3A3;
+  --fg-hint: #D4D4D4;
+
+  --accent-primary: #059669;
+  --accent-primary-muted: #D1FAE5;
+  --accent-secondary: #0284C7;
+  --status-warning: #D97706;
+  --status-error: #DC2626;
+
+  color-scheme: light;
+}
+
+/* ---------- Tailwind v4 theme tokens ---------- */
+@theme {
+  --color-surface-base: var(--surface-base);
+  --color-surface-card: var(--surface-card);
+  --color-surface-code-inline: var(--surface-code-inline);
+  --color-surface-elevated: var(--surface-elevated);
+
+  --color-border-shell: var(--border);
+  --color-border-primary-subtle: var(--border-primary-subtle);
+
+  --color-fg-primary: var(--fg-primary);
+  --color-fg-secondary: var(--fg-secondary);
+  --color-fg-tertiary: var(--fg-tertiary);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-disabled: var(--fg-disabled);
+  --color-fg-placeholder: var(--fg-placeholder);
+  --color-fg-hint: var(--fg-hint);
+
+  --color-accent-primary: var(--accent-primary);
+  --color-accent-primary-muted: var(--accent-primary-muted);
+  --color-accent-secondary: var(--accent-secondary);
+  --color-status-warning: var(--status-warning);
+  --color-status-error: var(--status-error);
+
+  --radius-shell: var(--shell-radius);
+  --radius-shell-sm: var(--shell-radius-sm);
+
+  --font-sans: 'DM Sans', 'Noto Sans', 'Noto Sans SC', 'Noto Sans TC', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
+}
+
+/* ---------- Base styles ---------- */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  font-family: var(--font-sans);
+  background: var(--surface-base);
+  color: var(--fg-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ---------- Scrollbar styling (matches Flutter dark aesthetic) ---------- */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--fg-muted);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--fg-tertiary);
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--fg-muted) transparent;
+}
+
+/* ---------- Selection ---------- */
+::selection {
+  background: var(--accent-primary-muted);
+  color: var(--accent-primary);
+}
+
+/* ---------- Focus ring ---------- */
+:focus-visible {
+  outline: 1px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
+/* ---------- Utility classes ---------- */
+.text-balance {
+  text-wrap: balance;
+}
+
+/* ---------- Streaming indicator animation ---------- */
+@keyframes pulse-dot {
+  0%, 80%, 100% { opacity: 0.2; }
+  40% { opacity: 1; }
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 1.4s ease-in-out infinite;
+}
+
+/* ---------- xterm overrides ---------- */
+.xterm {
+  padding: 4px 8px;
+}
+.xterm-viewport::-webkit-scrollbar {
+  width: 6px;
+}
+.xterm-viewport::-webkit-scrollbar-thumb {
+  background: var(--fg-muted);
+  border-radius: 3px;
+}

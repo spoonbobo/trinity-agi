@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'auth.dart';
+import 'http_utils.dart';
 import 'protocol.dart';
 import '../models/ws_frame.dart';
 
@@ -26,6 +27,7 @@ class GatewayClient extends ChangeNotifier {
   }
 
   WebSocketChannel? _channel;
+  StreamSubscription? _channelSub;
   ConnectionState _state = ConnectionState.disconnected;
   final _uuid = const Uuid();
   int _connectionEpoch = 0;
@@ -87,7 +89,8 @@ class GatewayClient extends ChangeNotifier {
           _scheduleReconnect();
         }
       });
-      _channel!.stream.listen(
+      _channelSub?.cancel();
+      _channelSub = _channel!.stream.listen(
         (raw) => _onMessage(raw, epoch),
         onError: (error) => _onError(error, epoch),
         onDone: () => _onDone(epoch),
@@ -95,6 +98,7 @@ class GatewayClient extends ChangeNotifier {
     } catch (e) {
       _state = ConnectionState.error;
       notifyListeners();
+      _scheduleReconnect();
       rethrow;
     }
   }
@@ -353,6 +357,8 @@ class GatewayClient extends ChangeNotifier {
     _connectionEpoch++;
     _connectTimeoutTimer?.cancel();
     _reconnectTimer?.cancel();
+    _channelSub?.cancel();
+    _channelSub = null;
     _reconnectAttempts = 0;
     _channel?.sink.close();
     _state = ConnectionState.disconnected;
@@ -406,7 +412,7 @@ class GatewayClient extends ChangeNotifier {
   Future<Map<String, dynamic>> browserApiGet(String path, {String profile = 'openclaw'}) async {
     final separator = path.contains('?') ? '&' : '?';
     final fullUrl = '$_browserBaseUrl/__openclaw__/browser$path${separator}profile=$profile';
-    final response = await html.HttpRequest.request(
+    final response = await safeHttpRequest(
       fullUrl,
       method: 'GET',
       requestHeaders: _browserHeaders,
@@ -423,7 +429,7 @@ class GatewayClient extends ChangeNotifier {
   }) async {
     final separator = path.contains('?') ? '&' : '?';
     final fullUrl = '$_browserBaseUrl/__openclaw__/browser$path${separator}profile=$profile';
-    final response = await html.HttpRequest.request(
+    final response = await safeHttpRequest(
       fullUrl,
       method: 'POST',
       requestHeaders: _browserHeaders,
@@ -444,7 +450,7 @@ class GatewayClient extends ChangeNotifier {
   Future<Map<String, dynamic>> browserApiDelete(String path, {String profile = 'openclaw'}) async {
     final separator = path.contains('?') ? '&' : '?';
     final fullUrl = '$_browserBaseUrl/__openclaw__/browser$path${separator}profile=$profile';
-    final response = await html.HttpRequest.request(
+    final response = await safeHttpRequest(
       fullUrl,
       method: 'DELETE',
       requestHeaders: _browserHeaders,

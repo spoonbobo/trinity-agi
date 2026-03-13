@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/http_utils.dart';
 import '../../core/theme.dart';
 import '../../core/toast_provider.dart';
 import '../../main.dart' show authClientProvider;
@@ -87,17 +88,7 @@ class _AdminOpenClawsTabState extends ConsumerState<AdminOpenClawsTab> {
     request.open('GET', url);
     request.setRequestHeader('Authorization', 'Bearer $token');
     request.setRequestHeader('Content-Type', 'application/json');
-    final completer = Completer<String>();
-    request.onLoad.listen((_) {
-      if (request.status! >= 200 && request.status! < 300) {
-        completer.complete(request.responseText ?? '{}');
-      } else {
-        completer.completeError('HTTP ${request.status}: ${request.responseText}');
-      }
-    });
-    request.onError.listen((_) => completer.completeError('request failed'));
-    request.send();
-    return completer.future;
+    return safeXhr(request);
   }
 
   Future<String> _httpPost(String path, Map<String, dynamic> body) async {
@@ -107,17 +98,7 @@ class _AdminOpenClawsTabState extends ConsumerState<AdminOpenClawsTab> {
     request.open('POST', url);
     request.setRequestHeader('Authorization', 'Bearer $token');
     request.setRequestHeader('Content-Type', 'application/json');
-    final completer = Completer<String>();
-    request.onLoad.listen((_) {
-      if (request.status! >= 200 && request.status! < 300) {
-        completer.complete(request.responseText ?? '{}');
-      } else {
-        completer.completeError('HTTP ${request.status}: ${request.responseText}');
-      }
-    });
-    request.onError.listen((_) => completer.completeError('request failed'));
-    request.send(jsonEncode(body));
-    return completer.future;
+    return safeXhr(request, body: jsonEncode(body));
   }
 
   Future<String> _httpDelete(String path) async {
@@ -127,17 +108,7 @@ class _AdminOpenClawsTabState extends ConsumerState<AdminOpenClawsTab> {
     request.open('DELETE', url);
     request.setRequestHeader('Authorization', 'Bearer $token');
     request.setRequestHeader('Content-Type', 'application/json');
-    final completer = Completer<String>();
-    request.onLoad.listen((_) {
-      if (request.status! >= 200 && request.status! < 300) {
-        completer.complete(request.responseText ?? '{}');
-      } else {
-        completer.completeError('HTTP ${request.status}: ${request.responseText}');
-      }
-    });
-    request.onError.listen((_) => completer.completeError('request failed'));
-    request.send();
-    return completer.future;
+    return safeXhr(request);
   }
 
   // ---------------------------------------------------------------------------

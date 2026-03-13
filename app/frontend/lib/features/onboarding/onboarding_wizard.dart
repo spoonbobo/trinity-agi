@@ -55,6 +55,7 @@ class _OnboardingWizardState extends ConsumerState<OnboardingWizard> {
       await client.connect();
       await Future.delayed(const Duration(milliseconds: 500));
 
+      if (!mounted) return;
       if (client.isAuthenticated) {
         setState(() {
           _isConnecting = false;
@@ -67,6 +68,7 @@ class _OnboardingWizardState extends ConsumerState<OnboardingWizard> {
         });
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isConnecting = false;
         _connectionError = 'Failed to connect: $e';

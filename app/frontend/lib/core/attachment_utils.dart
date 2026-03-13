@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:html' as html;
 
+import 'http_utils.dart';
+
 /// File size limits aligned with OpenClaw gateway caps.
 class AttachmentLimits {
   static const int maxImageBytes = 5 * 1024 * 1024;        // 5 MB
@@ -136,10 +138,17 @@ class ImageCompressor {
       final url = html.Url.createObjectUrlFromBlob(file);
       final img = html.ImageElement();
       final completer = Completer<void>();
-      img.onLoad.first.then((_) => completer.complete());
-      img.onError.first.then((_) => completer.completeError('Failed to load image'));
+      img.onLoad.first.then((_) {
+        if (!completer.isCompleted) completer.complete();
+      });
+      img.onError.first.then((_) {
+        if (!completer.isCompleted) completer.completeError('Failed to load image');
+      });
       img.src = url;
-      await completer.future;
+      await completer.future.timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => throw Exception('Image load timed out'),
+      );
       html.Url.revokeObjectUrl(url);
 
       final origW = img.naturalWidth;
@@ -235,53 +244,27 @@ Future<FileUploadResult> uploadFileToWorkspace({
   request.setRequestHeader('Content-Type', mimeType);
   request.setRequestHeader('X-File-Name', Uri.encodeComponent(fileName));
 
-  final completer = Completer<FileUploadResult>();
-
-  request.onLoadEnd.first.then((_) {
-    if (completer.isCompleted) return;
-    if (request.status! >= 200 && request.status! < 300) {
-      try {
-        final body = jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
-        completer.complete(FileUploadResult(
-          ok: body['ok'] == true,
-          path: body['path'] as String?,
-          name: body['name'] as String?,
-          size: body['size'] as int?,
-          error: body['error'] as String?,
-        ));
-      } catch (e) {
-        completer.complete(FileUploadResult(
-          ok: false,
-          error: 'Invalid response: $e',
-        ));
-      }
-    } else {
-      String errorMsg = 'Upload failed (HTTP ${request.status})';
-      try {
-        final body = jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
-        if (body['error'] != null) errorMsg = body['error'] as String;
-      } catch (_) {}
-      completer.complete(FileUploadResult(ok: false, error: errorMsg));
+  try {
+    final responseText = await safeXhr(
+      request,
+      body: html.Blob([bytes], mimeType),
+      timeout: const Duration(seconds: 30),
+    );
+    final body = jsonDecode(responseText) as Map<String, dynamic>;
+    return FileUploadResult(
+      ok: body['ok'] == true,
+      path: body['path'] as String?,
+      name: body['name'] as String?,
+      size: body['size'] as int?,
+      error: body['error'] as String?,
+    );
+  } on TimeoutException {
+    return FileUploadResult(ok: false, error: 'Upload timed out');
+  } catch (e) {
+    final msg = e.toString();
+    if (msg.contains('HTTP ')) {
+      return FileUploadResult(ok: false, error: 'Upload failed: $msg');
     }
-  });
-
-  // Handle network-level errors (CORS, unreachable, etc.)
-  request.onError.first.then((_) {
-    if (!completer.isCompleted) {
-      completer.complete(FileUploadResult(ok: false, error: 'Network error during upload'));
-    }
-  });
-
-  // Timeout after 30 seconds
-  Future.delayed(const Duration(seconds: 30), () {
-    if (!completer.isCompleted) {
-      request.abort();
-      completer.complete(FileUploadResult(ok: false, error: 'Upload timed out'));
-    }
-  });
-
-  // Send raw bytes as a Blob
-  request.send(html.Blob([bytes], mimeType));
-
-  return completer.future;
+    return FileUploadResult(ok: false, error: 'Network error during upload');
+  }
 }

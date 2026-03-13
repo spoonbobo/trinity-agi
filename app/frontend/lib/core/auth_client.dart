@@ -2,12 +2,14 @@ import 'dart:convert';
 import 'dart:html' as html;
 import 'package:flutter/foundation.dart' show ChangeNotifier, kDebugMode, debugPrint;
 
+import 'http_utils.dart';
+
 const _tokenKey = 'trinity_auth_token';
 const _roleKey = 'trinity_auth_role';
 const _permissionsKey = 'trinity_auth_permissions';
 const _userIdKey = 'trinity_auth_user_id';
 const _emailKey = 'trinity_auth_email';
-const _activeOpenClawIdKey = 'trinity_active_openclaw_id';
+
 
 enum AuthRole { guest, user, admin, superadmin }
 
@@ -196,8 +198,6 @@ class AuthClient extends ChangeNotifier {
     final permsJson = html.window.localStorage[_permissionsKey];
     final userId = html.window.localStorage[_userIdKey];
     final email = html.window.localStorage[_emailKey];
-    final activeOpenClawId = html.window.localStorage[_activeOpenClawIdKey];
-
     if (token != null && token.isNotEmpty) {
       if (_isExpiredToken(token)) {
         if (kDebugMode) debugPrint('[Auth] Stored token expired; clearing session');
@@ -219,26 +219,7 @@ class AuthClient extends ChangeNotifier {
         role: parseRole(role),
         permissions: permissions,
         isGuest: role == 'guest',
-        activeOpenClawId: activeOpenClawId,
       );
-
-      // Safari can occasionally stall initial /auth/openclaws hydration after a
-      // hard reload even with a valid persisted selection. Optimistically mark
-      // the persisted OpenClaw as active so shell routing can proceed while the
-      // authoritative assignment list refreshes in background.
-      if (activeOpenClawId != null && activeOpenClawId.isNotEmpty) {
-        _state = _state.copyWith(
-          openclaws: [
-            OpenClawInfo(
-              id: activeOpenClawId,
-              name: 'openclaw',
-              status: 'unknown',
-              ready: true,
-            ),
-          ],
-        );
-        _openClawStatus = OpenClawStatus.ready;
-      }
 
       notifyListeners();
 
@@ -265,11 +246,8 @@ class AuthClient extends ChangeNotifier {
     if (_state.email != null) {
       html.window.localStorage[_emailKey] = _state.email!;
     }
-    if (_state.activeOpenClawId != null) {
-      html.window.localStorage[_activeOpenClawIdKey] = _state.activeOpenClawId!;
-    } else {
-      html.window.localStorage.remove(_activeOpenClawIdKey);
-    }
+    // activeOpenClawId is no longer persisted -- the HTTP response from
+    // GET /auth/openclaws is the single source of truth on reload.
   }
 
   Future<void> loginWithEmail(String email, String password) async {
@@ -280,10 +258,8 @@ class AuthClient extends ChangeNotifier {
     request.setRequestHeader('Content-Type', 'application/json');
     request.setRequestHeader('apikey', const String.fromEnvironment('SUPABASE_ANON_KEY', defaultValue: ''));
 
-    final completer = _createRequestCompleter(request);
-    request.send(jsonEncode({'email': email, 'password': password}));
-
-    final response = await completer;
+    final response = await safeXhr(request,
+        body: jsonEncode({'email': email, 'password': password}));
     final body = jsonDecode(response);
     final accessToken = body['access_token'] as String;
 
@@ -297,10 +273,8 @@ class AuthClient extends ChangeNotifier {
     request.setRequestHeader('Content-Type', 'application/json');
     request.setRequestHeader('apikey', const String.fromEnvironment('SUPABASE_ANON_KEY', defaultValue: ''));
 
-    final completer = _createRequestCompleter(request);
-    request.send(jsonEncode({'email': email, 'password': password}));
-
-    final response = await completer;
+    final response = await safeXhr(request,
+        body: jsonEncode({'email': email, 'password': password}));
     final body = jsonDecode(response);
     final accessToken = body['access_token'] as String?;
 
@@ -315,10 +289,7 @@ class AuthClient extends ChangeNotifier {
     request.open('POST', uri.toString());
     request.setRequestHeader('Content-Type', 'application/json');
 
-    final completer = _createRequestCompleter(request);
-    request.send('{}');
-
-    final response = await completer;
+    final response = await safeXhr(request, body: '{}');
     final body = jsonDecode(response);
 
     _state = AuthState(
@@ -347,10 +318,7 @@ class AuthClient extends ChangeNotifier {
     request.setRequestHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     request.setRequestHeader('Pragma', 'no-cache');
 
-    final completer = _createRequestCompleter(request);
-    request.send();
-
-    final response = await completer;
+    final response = await safeXhr(request);
     final body = jsonDecode(response);
 
     _state = AuthState(
@@ -399,8 +367,8 @@ class AuthClient extends ChangeNotifier {
     final hasFallbackOpenClaw =
         _state.activeOpenClawId != null && _state.openclaws.isNotEmpty;
 
-    // Keep reconnect path non-blocking when a persisted OpenClaw is already
-    // known locally. We still refresh assignments in the background.
+    // If the user already has a live OpenClaw list (e.g. admin re-fetch after
+    // assign/unassign), keep status ready so the connection is not interrupted.
     _openClawStatus =
         hasFallbackOpenClaw ? OpenClawStatus.ready : OpenClawStatus.loading;
     _openClawError = null;
@@ -419,22 +387,14 @@ class AuthClient extends ChangeNotifier {
         request.setRequestHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         request.setRequestHeader('Pragma', 'no-cache');
 
-        final completer = _createRequestCompleter(request);
-        request.send();
-
-        return completer.timeout(
-          const Duration(seconds: 10),
-          onTimeout: () {
-            throw Exception('Request timed out after 10 seconds');
-          },
-        );
+        return safeXhr(request, timeout: const Duration(seconds: 3));
       }
 
       String responseText;
       try {
         responseText = await requestOpenClaws();
       } catch (firstError) {
-        // One quick retry for transient Safari/network hiccups.
+        // One quick retry for transient network hiccups.
         if (kDebugMode) {
           debugPrint('[Auth] openclaws first attempt failed, retrying: $firstError');
         }
@@ -470,8 +430,8 @@ class AuthClient extends ChangeNotifier {
         return;
       }
 
-      // Auto-select: prefer the previously persisted ID if it's still in the
-      // list, otherwise pick the first ready instance, or just the first one.
+      // Auto-select: prefer the current active ID if it's still in the list
+      // (e.g. background re-fetch), otherwise pick the first ready instance.
       final persistedId = _state.activeOpenClawId;
       String selectedId;
       if (persistedId != null && openclaws.any((oc) => oc.id == persistedId)) {
@@ -527,7 +487,6 @@ class AuthClient extends ChangeNotifier {
     html.window.localStorage.remove(_permissionsKey);
     html.window.localStorage.remove(_userIdKey);
     html.window.localStorage.remove(_emailKey);
-    html.window.localStorage.remove(_activeOpenClawIdKey);
     notifyListeners();
   }
 
@@ -538,10 +497,7 @@ class AuthClient extends ChangeNotifier {
     request.open('GET', uri.toString());
     request.setRequestHeader('Authorization', 'Bearer ${_state.token}');
 
-    final completer = _createRequestCompleter(request);
-    request.send();
-
-    final response = await completer;
+    final response = await safeXhr(request);
     final body = jsonDecode(response);
     return List<Map<String, dynamic>>.from(
       (body['users'] as List?)?.map((e) => Map<String, dynamic>.from(e as Map)) ?? [],
@@ -556,10 +512,7 @@ class AuthClient extends ChangeNotifier {
     request.setRequestHeader('Content-Type', 'application/json');
     request.setRequestHeader('Authorization', 'Bearer ${_state.token}');
 
-    final completer = _createRequestCompleter(request);
-    request.send(jsonEncode({'role': role}));
-
-    await completer;
+    await safeXhr(request, body: jsonEncode({'role': role}));
   }
 
   /// Fetch paginated audit log with server-side filters. Requires [audit.read] permission.
@@ -591,10 +544,7 @@ class AuthClient extends ChangeNotifier {
     request.open('GET', uri.toString());
     request.setRequestHeader('Authorization', 'Bearer ${_state.token}');
 
-    final completer = _createRequestCompleter(request);
-    request.send();
-
-    final response = await completer;
+    final response = await safeXhr(request);
     final body = jsonDecode(response);
     final logs = List<Map<String, dynamic>>.from(
       (body['logs'] as List?)?.map((e) => Map<String, dynamic>.from(e as Map)) ?? [],
@@ -628,10 +578,7 @@ class AuthClient extends ChangeNotifier {
     request.open('GET', uri.toString());
     request.setRequestHeader('Authorization', 'Bearer ${_state.token}');
 
-    final completer = _createRequestCompleter(request);
-    request.send();
-
-    final response = await completer;
+    final response = await safeXhr(request);
     return Map<String, dynamic>.from(jsonDecode(response) as Map);
   }
 
@@ -643,24 +590,10 @@ class AuthClient extends ChangeNotifier {
     request.setRequestHeader('Content-Type', 'application/json');
     request.setRequestHeader('Authorization', 'Bearer ${_state.token}');
 
-    final completer = _createRequestCompleter(request);
-    request.send(jsonEncode({'permissions': permissions}));
-
-    await completer;
+    await safeXhr(request, body: jsonEncode({'permissions': permissions}));
   }
 
   String getKeycloakLoginUrl() {
     return '$authServiceBaseUrl/supabase/auth/authorize?provider=keycloak';
-  }
-
-  Future<String> _createRequestCompleter(html.HttpRequest request) {
-    final completer = Future<String>.delayed(Duration.zero, () async {
-      await request.onLoadEnd.first;
-      if (request.status! >= 200 && request.status! < 300) {
-        return request.responseText ?? '{}';
-      }
-      throw Exception('HTTP ${request.status}: ${request.responseText}');
-    });
-    return completer;
   }
 }

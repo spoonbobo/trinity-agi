@@ -3,6 +3,7 @@ import 'dart:html' as html;
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/http_utils.dart';
 import '../../core/providers.dart';
 
 // ---------------------------------------------------------------------------
@@ -151,8 +152,13 @@ class BrowserNotifier extends StateNotifier<BrowserState> {
     final raw = error.toString();
     final lower = raw.toLowerCase();
 
-    if (lower.contains('minified:')) {
-      return 'Browser request failed (frontend runtime error). Please retry refresh/sync.';
+    // In release mode, dart:html ProgressEvent (thrown on non-2xx HTTP) is
+    // minified. Treat it as a gateway/network error, not a frontend bug.
+    if (lower.contains('minified:') || lower.contains('progressevent')) {
+      return 'Browser gateway not reachable. Retrying...';
+    }
+    if (lower.contains('timeout')) {
+      return 'Browser request timed out. Please retry.';
     }
     if (lower.contains('401') || lower.contains('403') || lower.contains('unauthorized')) {
       return 'Browser auth failed. Please re-open the session and try again.';
@@ -167,8 +173,50 @@ class BrowserNotifier extends StateNotifier<BrowserState> {
   }
 
   void _init() {
-    // Fetch initial status
-    refreshStatus();
+    // Fetch initial status with retry -- the gateway/OpenClaw pod may not be
+    // ready yet immediately after page load.
+    _refreshStatusWithRetry();
+  }
+
+  Future<void> _refreshStatusWithRetry({int maxRetries = 3}) async {
+    for (var attempt = 0; attempt <= maxRetries; attempt++) {
+      if (_disposed) return;
+      try {
+        final client = _ref.read(gatewayClientProvider);
+        final result = await client.browserStatus(profile: state.profile);
+        if (_disposed) return;
+
+        final running = result['running'] as bool? ??
+            result['status'] == 'running' || result['status'] == 'connected';
+
+        state = state.copyWith(
+          runState: running ? BrowserRunState.running : BrowserRunState.stopped,
+          error: null,
+        );
+
+        if (running) {
+          await Future.wait([refreshTabs(), _refreshScreenshot()]);
+          if (state.autoRefresh && _pollTimer == null) {
+            startPolling();
+          }
+        }
+        return; // success
+      } catch (e) {
+        if (_disposed) return;
+        if (attempt < maxRetries) {
+          if (kDebugMode) {
+            debugPrint('[Browser] status attempt ${attempt + 1} failed, retrying: $e');
+          }
+          await Future<void>.delayed(Duration(seconds: 1 + attempt));
+        } else {
+          if (kDebugMode) debugPrint('[Browser] status error after ${maxRetries + 1} attempts: $e');
+          state = state.copyWith(
+            runState: BrowserRunState.error,
+            error: _humanizeError(e),
+          );
+        }
+      }
+    }
   }
 
   /// Start auto-refresh polling.
@@ -374,7 +422,7 @@ class BrowserNotifier extends StateNotifier<BrowserState> {
       final imageUrl =
           '${client.browserBaseUrl}/__openclaw__/browser-media/$filename';
 
-      final imgResp = await html.HttpRequest.request(
+      final imgResp = await safeHttpRequest(
         imageUrl,
         method: 'GET',
         responseType: 'arraybuffer',
@@ -382,6 +430,7 @@ class BrowserNotifier extends StateNotifier<BrowserState> {
           'Authorization': 'Bearer ${client.auth.token}',
           if (client.openclawId != null) 'X-OpenClaw-Id': client.openclawId!,
         },
+        timeout: const Duration(seconds: 15),
       );
       if (_disposed) return;
       if (imgResp.status == 200) {

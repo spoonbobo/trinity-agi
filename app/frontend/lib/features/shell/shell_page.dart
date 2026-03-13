@@ -809,16 +809,20 @@ class _ShellPageState extends ConsumerState<ShellPage> {
             ),
             if (!isMobile) ...[
               const SizedBox(width: 10),
-              if (authState.openclaws.isNotEmpty) ...[
+              if (authState.openclaws.isNotEmpty ||
+                  openClawStatus == OpenClawStatus.loading ||
+                  openClawStatus == OpenClawStatus.ready) ...[
                 if (authState.role == AuthRole.superadmin) ...[
                   _ConfigureWithCopilotLink(
                     clawName: authState.activeOpenClaw?.name ?? 'claw',
                     configureLabel: tr(language, 'configure'),
                     switchLabel: tr(language, 'switch'),
-                    onSwitchTap: () => _showOpenClawSwitcher(
-                      openclaws: authState.openclaws,
-                      activeId: authState.activeOpenClawId,
-                    ),
+                    onSwitchTap: authState.openclaws.isNotEmpty
+                        ? () => _showOpenClawSwitcher(
+                            openclaws: authState.openclaws,
+                            activeId: authState.activeOpenClawId,
+                          )
+                        : null,
                     onRefreshTap: _refreshActiveSession,
                     onTap: _showCopilotDialog,
                     t: t,
@@ -829,10 +833,12 @@ class _ShellPageState extends ConsumerState<ShellPage> {
                     children: [
                       _StatusModeActionLink(
                         label: tr(language, 'switch_claw'),
-                        onTap: () => _showOpenClawSwitcher(
-                          openclaws: authState.openclaws,
-                          activeId: authState.activeOpenClawId,
-                        ),
+                        onTap: authState.openclaws.isNotEmpty
+                            ? () => _showOpenClawSwitcher(
+                                openclaws: authState.openclaws,
+                                activeId: authState.activeOpenClawId,
+                              )
+                            : null,
                         t: t,
                         textColor: t.accentPrimary,
                       ),
@@ -931,7 +937,7 @@ class _ConfigureWithCopilotLink extends StatelessWidget {
   final String clawName;
   final String configureLabel;
   final String switchLabel;
-  final VoidCallback onSwitchTap;
+  final VoidCallback? onSwitchTap;
   final VoidCallback onRefreshTap;
   final VoidCallback onTap;
   final ShellTokens t;
@@ -941,7 +947,7 @@ class _ConfigureWithCopilotLink extends StatelessWidget {
     required this.clawName,
     required this.configureLabel,
     required this.switchLabel,
-    required this.onSwitchTap,
+    this.onSwitchTap,
     required this.onRefreshTap,
     required this.onTap,
     required this.t,
@@ -985,20 +991,21 @@ class _ConfigureWithCopilotLink extends StatelessWidget {
         GestureDetector(
           onTap: onSwitchTap,
           child: MouseRegion(
-            cursor: SystemMouseCursors.click,
+            cursor: onSwitchTap != null ? SystemMouseCursors.click : SystemMouseCursors.basic,
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
                   switchLabel,
                   style: theme.textTheme.labelSmall?.copyWith(
-                    color: t.fgMuted,
+                    color: onSwitchTap != null ? t.fgMuted : t.fgMuted.withOpacity(0.5),
                     fontSize: 10,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(width: 4),
-                Icon(Icons.swap_horiz, size: 12, color: t.fgMuted),
+                Icon(Icons.swap_horiz, size: 12,
+                  color: onSwitchTap != null ? t.fgMuted : t.fgMuted.withOpacity(0.5)),
               ],
             ),
           ),
@@ -1060,13 +1067,13 @@ class _StatusIconActionLink extends StatelessWidget {
 
 class _StatusModeActionLink extends StatelessWidget {
   final String label;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final ShellTokens t;
   final Color textColor;
 
   const _StatusModeActionLink({
     required this.label,
-    required this.onTap,
+    this.onTap,
     required this.t,
     required this.textColor,
   });
@@ -1074,14 +1081,15 @@ class _StatusModeActionLink extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final enabled = onTap != null;
     return GestureDetector(
       onTap: onTap,
       child: MouseRegion(
-        cursor: SystemMouseCursors.click,
+        cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
         child: Text(
           label,
           style: theme.textTheme.labelSmall?.copyWith(
-            color: textColor,
+            color: enabled ? textColor : t.fgMuted.withOpacity(0.5),
             fontSize: 10,
             fontWeight: FontWeight.w600,
           ),

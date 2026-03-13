@@ -14,7 +14,7 @@ ARG GATEWAY_WS_URL=ws://localhost/ws
 ARG TERMINAL_WS_URL=ws://localhost/terminal/
 ARG AUTH_SERVICE_URL=http://localhost
 ARG SUPABASE_ANON_KEY=
-RUN flutter build web --release \
+RUN flutter build web --release --pwa-strategy=none \
     --dart-define=GATEWAY_WS_URL=$GATEWAY_WS_URL \
     --dart-define=TERMINAL_WS_URL=$TERMINAL_WS_URL \
     --dart-define=AUTH_SERVICE_URL=$AUTH_SERVICE_URL \

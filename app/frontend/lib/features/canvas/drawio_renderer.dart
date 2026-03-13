@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'dart:ui_web' as ui_web;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/http_utils.dart';
 import '../../main.dart' show authClientProvider;
 import 'canvas_mode_provider.dart';
 
@@ -155,19 +156,8 @@ class DrawIOSnapshotStore {
     request.setRequestHeader('Authorization', 'Bearer $token');
     request.setRequestHeader('Content-Type', 'application/json');
 
-    final completer = Completer<String>();
-    request.onLoad.listen((_) {
-      final status = request.status ?? 0;
-      if (status >= 200 && status < 300) {
-        completer.complete(request.responseText ?? '{}');
-      } else {
-        completer.completeError('HTTP $status: ${request.responseText}');
-      }
-    });
-    request.onError.listen((_) => completer.completeError('request failed'));
-    request.send(body == null ? null : jsonEncode(body));
-
-    final text = await completer.future;
+    final text = await safeXhr(request,
+        body: body == null ? null : jsonEncode(body));
     if (text.trim().isEmpty) return {};
     return Map<String, dynamic>.from(jsonDecode(text) as Map);
   }

@@ -276,6 +276,7 @@ async function readUpstreamJsonOrText(response) {
 async function fetchAssignedOpenClawsForUser(userId) {
   const orchRes = await fetch(`${ORCHESTRATOR_URL}/users/${userId}/openclaws`, {
     headers: { Authorization: `Bearer ${ORCHESTRATOR_SERVICE_TOKEN}` },
+    signal: AbortSignal.timeout(3000),
   });
 
   if (!orchRes.ok) {

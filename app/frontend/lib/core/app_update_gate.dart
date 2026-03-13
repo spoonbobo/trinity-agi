@@ -4,6 +4,8 @@ import 'dart:html' as html;
 
 import 'package:flutter/material.dart';
 
+import 'http_utils.dart';
+
 class AppUpdateGate extends StatefulWidget {
   final Widget child;
 
@@ -69,13 +71,14 @@ class _AppUpdateGateState extends State<AppUpdateGate> {
 
   Future<String?> _fetchVersionTokenFrom(String path) async {
     try {
-      final response = await html.HttpRequest.request(
+      final response = await safeHttpRequest(
         '$path?v=${DateTime.now().millisecondsSinceEpoch}',
         method: 'GET',
         requestHeaders: const {
           'Cache-Control': 'no-cache, no-store, must-revalidate',
           'Pragma': 'no-cache',
         },
+        timeout: const Duration(seconds: 5),
       );
 
       if (response.status != 200) return null;

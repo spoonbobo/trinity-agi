@@ -157,6 +157,117 @@ docker restart trinity-nginx
 | AUTH_SERVICE_URL | http://localhost |
 | SUPABASE_ANON_KEY | (empty) |
 
+## HTTP Requests -- MANDATORY: Use `safeXhr()` / `safeHttpRequest()`
+
+All browser HTTP requests MUST go through the shared helpers in `core/http_utils.dart`. **Never** create raw `html.HttpRequest` + manual `Completer` patterns.
+
+### `safeXhr(request, {body, timeout})`
+
+Use for requests where you build an `html.HttpRequest` manually (custom headers, auth tokens). Handles `onLoad`, `onError`, `onAbort` with configurable timeout (default 10s). Aborts the XHR on timeout.
+
+```dart
+import '../../core/http_utils.dart';
+
+final request = html.HttpRequest();
+request.open('GET', url);
+request.setRequestHeader('Authorization', 'Bearer $token');
+final responseText = await safeXhr(request);  // 10s default timeout
+final responseText = await safeXhr(request, body: jsonEncode(data), timeout: const Duration(seconds: 3));
+```
+
+### `safeHttpRequest(url, {method, requestHeaders, sendData, responseType, timeout})`
+
+Use as a drop-in replacement for `html.HttpRequest.request()` -- adds timeout. Returns `html.HttpRequest`.
+
+```dart
+final response = await safeHttpRequest(url, method: 'GET', requestHeaders: headers, timeout: const Duration(seconds: 5));
+```
+
+### Why this matters
+
+The original `Future.delayed(Duration.zero) + onLoadEnd.first` pattern had a race condition: if the browser resolved the request before the next microtask (cached response, reload cancel, bfcache restore), the `onLoadEnd` subscription was set up *after* the event fired and the Future hung forever. The `safeXhr` helper subscribes to events synchronously via a `Completer` before `send()` is called, eliminating the race.
+
+### Patterns to NEVER use
+
+```dart
+// BAD: Race condition -- onLoadEnd.first may miss the event
+final completer = Future<String>.delayed(Duration.zero, () async {
+  await request.onLoadEnd.first;
+  ...
+});
+request.send();
+
+// BAD: Manual Completer without onAbort or timeout
+final completer = Completer<String>();
+request.onLoad.listen((_) { completer.complete(...); });
+request.onError.listen((_) { completer.completeError(...); });
+request.send();
+return completer.future;  // hangs forever on abort or server hang
+
+// BAD: html.HttpRequest.request() without timeout
+final resp = await html.HttpRequest.request(url, method: 'GET', requestHeaders: headers);
+```
+
+## WebSocket Best Practices (`gateway_client.dart`)
+
+- **Always store stream subscriptions**: `_channelSub = _channel!.stream.listen(...)`. Cancel in `disconnect()` and before reconnecting to prevent orphaned callbacks accumulating over reconnections.
+- **Schedule reconnect on initial connect failure**: If `connect()` throws during `WebSocketChannel.connect()` or `_channel!.ready`, call `_scheduleReconnect()` in the catch block so the client auto-retries instead of getting stuck in error state.
+- **Use epoch guards**: The `_connectionEpoch` pattern prevents stale messages from old connections leaking into new ones.
+
+## Widget Lifecycle -- `mounted` Guards
+
+After every `await` in a `State` method, check `if (!mounted) return;` before calling `setState()`. Async operations (XHR, WebSocket, `Future.delayed`) can complete after the user closes a dialog or navigates away.
+
+```dart
+// CORRECT
+final result = await someAsyncCall();
+if (!mounted) return;
+setState(() => _data = result);
+
+// WRONG -- will throw "setState() called after dispose()"
+final result = await someAsyncCall();
+setState(() => _data = result);
+```
+
+## File Picker Safety
+
+Never `await picker.onChange.first` -- it hangs forever if the user cancels (some browsers don't fire `onChange` on cancel). Use a `Completer` with `window.onFocus` fallback and an absolute timeout:
+
+```dart
+final pickerCompleter = Completer<html.File?>();
+picker.onChange.first.then((_) {
+  if (!pickerCompleter.isCompleted) {
+    pickerCompleter.complete(picker.files?.first);
+  }
+});
+html.window.onFocus.first.then((_) {
+  Future.delayed(const Duration(milliseconds: 300), () {
+    if (!pickerCompleter.isCompleted) pickerCompleter.complete(null);
+  });
+});
+picker.click();
+final file = await pickerCompleter.future.timeout(
+  const Duration(minutes: 2), onTimeout: () => null,
+);
+```
+
+## Completer Safety Checklist
+
+When using `Completer` (outside of `safeXhr`):
+
+1. **Always handle all completion paths**: success, error, abort/cancel
+2. **Always add a timeout**: `.timeout(duration, onTimeout: ...)` on the `.future`
+3. **Guard against double-completion**: `if (!completer.isCompleted)` before every `.complete()` / `.completeError()`
+4. **Prefer `safeXhr()`** over manual Completer for any HTTP request
+
+## Browser Canvas -- Retry on Init
+
+The gateway/OpenClaw pod may not be ready when the canvas first loads. Use retry-with-backoff for initial status fetch (e.g., 3 retries, 1s/2s/3s delay). Don't show an error screen on the first transient failure.
+
+## `ProgressEvent` in Release Mode
+
+`html.HttpRequest.request()` throws a `ProgressEvent` on non-2xx status codes. In release (minified) mode, `ProgressEvent.toString()` produces `"Instance of 'minified:XY'"`. Error humanization code must NOT treat `"minified:"` as a frontend runtime error -- it's usually a gateway/network error.
+
 ## Do Not
 
 - Do not import providers from `shell_page.dart` -- use `core/providers.dart`
@@ -164,3 +275,8 @@ docker restart trinity-nginx
 - Do not use Material buttons -- use GestureDetector + Text
 - Do not hardcode URLs -- use `String.fromEnvironment()`
 - Do not bypass governance
+- Do not create raw `html.HttpRequest` + `Completer` patterns -- use `safeXhr()` or `safeHttpRequest()`
+- Do not use `Future.delayed(Duration.zero)` to defer stream subscriptions
+- Do not use `.onLoadEnd.first` or `.onLoad.first` for XHR -- use `safeXhr()` which subscribes synchronously
+- Do not `await stream.first` on browser events that may never fire (file pickers, etc.)
+- Do not call `setState()` after an `await` without checking `if (!mounted) return;`
