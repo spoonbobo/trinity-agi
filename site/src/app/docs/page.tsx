@@ -11,17 +11,17 @@ export default function DocsPage() {
           Introduction
         </h1>
         <p className="font-sans text-lg text-[#8b8b8b]">
-          Welcome to Trinity AGI documentation. A featureless command center
+          Welcome to Trinity documentation. A featureless command center
           where AI agents build the interface on demand.
         </p>
       </div>
 
       <div className="mt-12 rounded-2xl border border-[#2a2a2a] bg-[#141414] p-8">
         <h2 className="mb-4 font-sans text-xl font-semibold text-[#e5e5e5]">
-          What is Trinity AGI?
+          What is Trinity?
         </h2>
         <p className="mb-6 font-sans text-sm leading-relaxed text-[#8b8b8b]">
-          Trinity AGI is a self-hosted AI platform built around the idea that software should not
+          Trinity is a self-hosted AI platform built around the idea that software should not
           ship features &mdash; it should emerge them. You start with an empty screen, a prompt bar,
           and a per-user AI agent powered by{" "}
           <a href="https://docs.openclaw.ai" target="_blank" rel="noopener noreferrer" className="text-[#6ee7b7] underline">
@@ -30,9 +30,10 @@ export default function DocsPage() {
           . The agent generates interfaces, executes tasks, and learns from every interaction.
         </p>
         <p className="font-sans text-sm leading-relaxed text-[#8b8b8b]">
-          The platform runs as a 14-service Docker Compose stack (or Kubernetes Helm chart) with
+          The platform runs as a Docker Compose stack (or Kubernetes Helm chart) with
           a Flutter web shell, Go microservices for multi-tenant gateway orchestration, full RBAC,
-          Supabase for auth and storage, Keycloak for SSO federation, and Grafana/Loki for observability.
+          Supabase for auth and storage, Keycloak for SSO federation, knowledge-graph RAG, and
+          Grafana/Loki for observability.
         </p>
       </div>
 

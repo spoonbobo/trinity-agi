@@ -12,7 +12,7 @@ export default function DocsLayout({
         <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-6">
           <Link href="/" className="flex items-center gap-2 font-mono text-sm tracking-widest text-[#6ee7b7]">
             <span className="inline-block h-2 w-2 rounded-full bg-[#6ee7b7]" />
-            TRINITY AGI
+            TRINITY
           </Link>
           <nav className="flex items-center gap-6">
             <Link href="/" className="font-mono text-xs tracking-wide text-[#6b6b6b] transition hover:text-[#e5e5e5]">

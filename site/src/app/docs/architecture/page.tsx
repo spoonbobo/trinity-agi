@@ -9,7 +9,7 @@ export default function ArchitecturePage() {
           Architecture
         </h1>
         <p className="font-sans text-lg text-[#8b8b8b]">
-          A 14-service stack behind nginx, with per-user AI agents and a blank-canvas frontend.
+          A multi-service stack behind nginx, with per-user AI agents and a blank-canvas frontend.
         </p>
       </div>
 
@@ -18,7 +18,7 @@ export default function ArchitecturePage() {
           Overview
         </h2>
         <p className="mb-6 font-sans text-sm leading-relaxed text-[#8b8b8b]">
-          Trinity AGI runs as a Docker Compose stack (or Kubernetes Helm chart) with nginx as the
+          Trinity runs as a Docker Compose stack (or Kubernetes Helm chart) with nginx as the
           single entry point on port 80. The Flutter web shell connects via WebSocket to per-user
           OpenClaw gateway instances that are spun up on demand by the gateway orchestrator. All
           authentication flows through Supabase GoTrue and Keycloak, with RBAC enforced by the
@@ -67,6 +67,14 @@ export default function ArchitecturePage() {
             {
               title: "Vault",
               desc: "HashiCorp Vault for secret management. Stores API keys, tokens, and credentials. Runs in dev mode locally, production mode in K8s.",
+            },
+            {
+              title: "Copilot",
+              desc: "Dedicated OpenCode copilot service. Provides AI-assisted development capabilities through a separate model and context window.",
+            },
+            {
+              title: "LightRAG",
+              desc: "Knowledge graph RAG sidecar. Indexes documents into a hybrid graph + vector store for retrieval-augmented generation across the workspace.",
             },
             {
               title: "Grafana + Loki + Fluentd",

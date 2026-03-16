@@ -19,8 +19,7 @@ export const docsConfig = {
     {
       title: "Guides",
       items: [
-        { title: "Self-Hosted Setup", href: "/docs/self-hosted" },
-        { title: "API Reference", href: "/docs/api-reference" },
+        { title: "Minikube", href: "/docs/minikube" },
         { title: "Configuration", href: "/docs/configuration" },
       ],
     },

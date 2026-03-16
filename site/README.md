@@ -1,6 +1,6 @@
-# Trinity AGI Site
+# Trinity Site
 
-Marketing site for Trinity AGI's "nothing ships, everything emerges" model.
+Marketing site and documentation for Trinity.
 
 ## Local development
 

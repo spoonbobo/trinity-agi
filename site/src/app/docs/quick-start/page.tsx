@@ -9,7 +9,7 @@ export default function QuickStartPage() {
           Quick Start
         </h1>
         <p className="font-sans text-lg text-[#8b8b8b]">
-          Get the full Trinity AGI stack running locally with Docker Compose.
+          Get the full Trinity stack running locally with Docker Compose.
         </p>
       </div>
 
@@ -31,12 +31,12 @@ export default function QuickStartPage() {
         <div className="rounded-xl border border-[#2a2a2a] bg-[#141414] p-6">
           <pre className="overflow-x-auto font-mono text-sm text-[#8b8b8b]">
             <code>{`git clone https://github.com/spoonbobo/trinity/
-cd trinity/web
+cd trinity
 
 # Copy the example env and fill in your secrets
-cp .env.example .env
+cp app/.env.example app/.env
 
-# Required variables in .env:
+# Required variables in app/.env:
 #   SUPABASE_POSTGRES_PASSWORD=<choose-a-password>
 #   SUPABASE_JWT_SECRET=<generate-a-jwt-secret>
 #   SUPABASE_ANON_KEY=<your-supabase-anon-key>
@@ -54,8 +54,8 @@ cp .env.example .env
         <div className="rounded-xl border border-[#2a2a2a] bg-[#141414] p-6">
           <pre className="overflow-x-auto font-mono text-sm text-[#8b8b8b]">
             <code>{`# Build the Flutter web shell (runs as a Docker build profile)
-docker compose --profile build build frontend-builder
-docker compose --profile build run --rm frontend-builder`}</code>
+docker compose -f app/docker-compose.yml --profile build build --no-cache frontend-builder
+docker compose -f app/docker-compose.yml --profile build run --rm frontend-builder`}</code>
           </pre>
         </div>
       </div>
@@ -66,12 +66,13 @@ docker compose --profile build run --rm frontend-builder`}</code>
         </h2>
         <div className="rounded-xl border border-[#2a2a2a] bg-[#141414] p-6">
           <pre className="overflow-x-auto font-mono text-sm text-[#8b8b8b]">
-            <code>{`docker compose up -d
+            <code>{`docker compose -f app/docker-compose.yml up -d
 
-# This starts 14 services:
+# This starts 16 services:
 #   supabase-db, vault, supabase-auth, keycloak,
 #   auth-service, openclaw-gateway, terminal-proxy,
-#   nginx, grafana, loki, fluentd, and init jobs
+#   nginx, copilot, lightrag, grafana, loki, fluentd,
+#   and init jobs
 
 # The web shell is available at:
 #   http://localhost`}</code>
@@ -90,7 +91,7 @@ docker compose --profile build run --rm frontend-builder`}</code>
         <div className="rounded-xl border border-[#2a2a2a] bg-[#141414] p-6">
           <pre className="overflow-x-auto font-mono text-sm text-[#8b8b8b]">
             <code>{`Email:    admin@trinity.work
-Password: admin`}</code>
+Password: admin123`}</code>
           </pre>
         </div>
         <p className="mt-4 font-sans text-sm text-[#8b8b8b]">

@@ -10,7 +10,7 @@ export default function Navbar() {
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
         <a href="#" className="flex items-center gap-2 font-mono text-sm tracking-widest text-[#6ee7b7]">
           <span className="inline-block h-2 w-2 rounded-full bg-[#6ee7b7]" />
-          TRINITY AGI
+          TRINITY
         </a>
 
         <div className="hidden items-center gap-8 md:flex">

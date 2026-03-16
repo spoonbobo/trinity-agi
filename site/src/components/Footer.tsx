@@ -7,7 +7,7 @@ export default function Footer() {
           <div className="sm:col-span-2">
             <div className="mb-4 flex items-center gap-2 font-mono text-sm tracking-widest text-[#6ee7b7]">
               <span className="inline-block h-2 w-2 rounded-full bg-[#6ee7b7]" />
-              TRINITY AGI
+              TRINITY
             </div>
             <p className="max-w-xs font-sans text-sm leading-relaxed text-[#6b6b6b]">
               One brain. Every user teaches it. Everyone benefits.
@@ -57,17 +57,17 @@ export default function Footer() {
 
           <div>
             <h4 className="mb-4 font-mono text-[10px] tracking-[2px] text-[#6b6b6b]">
-              LEGAL
+              RESOURCES
             </h4>
             <ul className="space-y-2">
               <li>
-                <a href="#" className="font-sans text-sm text-[#6b6b6b] transition hover:text-[#e5e5e5]">
-                  Privacy
+                <a href="/docs" className="font-sans text-sm text-[#6b6b6b] transition hover:text-[#e5e5e5]">
+                  Docs
                 </a>
               </li>
               <li>
-                <a href="#" className="font-sans text-sm text-[#6b6b6b] transition hover:text-[#e5e5e5]">
-                  Terms
+                <a href="/docs/minikube" className="font-sans text-sm text-[#6b6b6b] transition hover:text-[#e5e5e5]">
+                  Minikube Guide
                 </a>
               </li>
             </ul>
@@ -76,7 +76,7 @@ export default function Footer() {
 
         <div className="mt-12 border-t border-[#1a1a1a] pt-6">
           <p className="font-mono text-[10px] tracking-wide text-[#2a2a2a]">
-            &copy; {new Date().getFullYear()} TRINITY AGI. ONE BRAIN. NO
+            &copy; {new Date().getFullYear()} TRINITY. ONE BRAIN. NO
             FEATURES. INFINITE POTENTIAL.
           </p>
         </div>
