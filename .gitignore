@@ -1,4 +1,6 @@
 nul
 kubectl.exe
 node_modules/
+
+app/skills/tender-check/TASK.md
 app/copilot/node_modules/
