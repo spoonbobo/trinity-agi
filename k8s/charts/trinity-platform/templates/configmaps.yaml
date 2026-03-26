@@ -76,16 +76,8 @@ data:
         limit_conn_zone $binary_remote_addr zone=ws_conn:10m;
 
         # Upstream blocks (resolved at config load time)
-        upstream gateway_proxy {
-            server gateway-proxy:{{ .Values.gatewayProxy.port }};
-        }
-
-        upstream terminal_proxy {
-            server terminal-proxy:{{ .Values.terminalProxy.port }};
-        }
-
-        upstream copilot_service {
-            server copilot:{{ .Values.copilot.port }};
+        upstream openshell_bridge {
+            server openshell-bridge:{{ .Values.openshellBridge.port }};
         }
 
         upstream auth_service {
@@ -237,7 +229,7 @@ data:
             # WebSocket -> Gateway Proxy (routes to per-user OpenClaw pods)
             location /ws {
                 limit_conn ws_conn 50;
-                proxy_pass http://gateway_proxy;
+                proxy_pass http://openshell_bridge;
                 proxy_http_version 1.1;
                 proxy_set_header Upgrade $http_upgrade;
                 proxy_set_header Connection "upgrade";
@@ -250,7 +242,7 @@ data:
             # Terminal WebSocket
             location /terminal/ {
                 limit_conn ws_conn 20;
-                proxy_pass http://terminal_proxy;
+                proxy_pass http://openshell_bridge;
                 proxy_http_version 1.1;
                 proxy_set_header Upgrade $http_upgrade;
                 proxy_set_header Connection "upgrade";
@@ -264,7 +256,7 @@ data:
             location ^~ /copilot/ {
                 limit_req zone=api_limit burst=30 nodelay;
                 rewrite ^/copilot(/.*)$ $1 break;
-                proxy_pass http://copilot_service;
+                proxy_pass http://openshell_bridge;
                 proxy_http_version 1.1;
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;
@@ -276,7 +268,7 @@ data:
             location ^~ /__openclaw__/ {
                 limit_req zone=api_limit burst=50 nodelay;
                 client_max_body_size 5m;
-                proxy_pass http://gateway_proxy;
+                proxy_pass http://openshell_bridge;
                 proxy_http_version 1.1;
                 proxy_set_header Upgrade $http_upgrade;
                 proxy_set_header Connection "upgrade";
@@ -286,14 +278,14 @@ data:
 
             location /v1/ {
                 limit_req zone=api_limit burst=50 nodelay;
-                proxy_pass http://gateway_proxy;
+                proxy_pass http://openshell_bridge;
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;
             }
 
             location /tools/ {
                 limit_req zone=api_limit burst=50 nodelay;
-                proxy_pass http://gateway_proxy;
+                proxy_pass http://openshell_bridge;
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;
             }
@@ -404,7 +396,7 @@ data:
           "enabled": true,
           "protocol": "openid-connect",
           "publicClient": false,
-          "secret": "{{ .Values.secrets.keycloakClientSecret }}",
+          "secret": "${KC_TRINITY_CLIENT_SECRET}",
           "standardFlowEnabled": true,
           "directAccessGrantsEnabled": false,
           "redirectUris": ["http://localhost/*", "http://localhost:80/*", "http://localhost:8080/*", "{{ .Values.urls.apiExternalUrl }}/*"],

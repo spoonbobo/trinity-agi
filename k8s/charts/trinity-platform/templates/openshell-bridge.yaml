@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: openshell-bridge
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: openshell-bridge
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.openshellBridge.port }}
+      targetPort: {{ .Values.openshellBridge.port }}
+      protocol: TCP
+  selector:
+    app: openshell-bridge
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openshell-bridge
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: openshell-bridge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openshell-bridge
+  template:
+    metadata:
+      labels:
+        app: openshell-bridge
+    spec:
+      securityContext:
+        runAsNonRoot: false
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: openshell-bridge
+          image: {{ .Values.global.imageRegistry }}{{ .Values.openshellBridge.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ .Values.openshellBridge.port }}
+          env:
+            - name: BRIDGE_PORT
+              value: {{ .Values.openshellBridge.port | quote }}
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: SUPABASE_JWT_SECRET
+            - name: ALLOWED_ORIGINS
+              value: {{ .Values.urls.allowedOrigins | quote }}
+            - name: OPENSHELL_SANDBOX_IMAGE
+              value: {{ .Values.openshellBridge.sandboxImage | default "openclaw" | quote }}
+            - name: SANDBOX_ENDPOINT_PATTERN
+              value: {{ .Values.openshellBridge.sandboxEndpointPattern | quote }}
+            - name: OPENSHELL_GATEWAY_ENDPOINT
+              value: {{ .Values.openshellBridge.gatewayEndpoint | default "https://host.docker.internal:8080" | quote }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.openshellBridge.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.openshellBridge.port }}
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.openshellBridge.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false

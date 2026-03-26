@@ -23,10 +23,17 @@ spec:
         vault.hashicorp.com/agent-inject-secret-keycloak: "secret/data/trinity/keycloak"
       {{- end }}
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: false
+        seccompProfile:
+          type: RuntimeDefault
       initContainers:
         - name: wait-for-auth-schema
           image: {{ include "trinity.image" (dict "image" .Values.supabaseDb.image "global" .Values.global) }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
           env:
             - name: PGPASSWORD
               valueFrom:
@@ -45,10 +52,19 @@ spec:
                 echo "[wait-for-auth-schema] waiting for auth schema..."
                 sleep 2
               done
+          resources:
+            limits:
+              memory: 64Mi
+              cpu: 100m
+            requests:
+              memory: 32Mi
+              cpu: 50m
       containers:
         - name: supabase-auth
           image: {{ include "trinity.image" (dict "image" .Values.supabaseAuth.image "global" .Values.global) }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
           ports:
             - containerPort: 9999
               name: http

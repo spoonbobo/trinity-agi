@@ -17,10 +17,17 @@ spec:
       labels:
         {{- include "trinity.componentLabels" (dict "component" "site" "Release" .Release "Chart" .Chart) | nindent 8 }}
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: false
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: site
           image: {{ include "trinity.image" (dict "image" .Values.site.image "global" .Values.global) }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
           ports:
             - containerPort: {{ .Values.site.port }}
               name: http

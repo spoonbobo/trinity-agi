@@ -1,0 +1,52 @@
+# Default sandbox policy for Trinity users.
+# Applied to every user sandbox unless overridden by a role-specific policy.
+
+version: 1
+
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /proc
+    - /dev/urandom
+    - /etc
+    - /var/log
+    - /opt/trinity-seed
+  read_write:
+    - /sandbox
+    - /tmp
+    - /dev/null
+
+landlock:
+  compatibility: best_effort
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+network_policies:
+  openclaw_core:
+    name: openclaw-core
+    endpoints:
+      - { host: docs.openclaw.ai, port: 443 }
+      - { host: registry.npmjs.org, port: 443 }
+    binaries:
+      - { path: /usr/bin/node }
+      - { path: /usr/local/bin/openclaw }
+
+  trinity_internal:
+    name: trinity-internal
+    endpoints:
+      - { host: auth-service, port: 18791 }
+      - { host: nginx, port: 80 }
+    binaries:
+      - { path: /usr/bin/node }
+
+  web_tools:
+    name: web-tools
+    endpoints:
+      - { host: api.search.brave.com, port: 443 }
+    binaries:
+      - { path: /usr/bin/node }
+      - { path: /usr/local/bin/openclaw }

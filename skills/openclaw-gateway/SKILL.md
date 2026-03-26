@@ -15,20 +15,15 @@ OpenClaw Gateway is the backend engine for Trinity AGI. It provides the agent ru
 Documentation index: https://docs.openclaw.ai/llms.txt
 Use that file to discover all available doc pages before exploring further.
 
-## Running Stack (Docker)
+## Running Stack
 
-The Trinity stack runs via Docker Compose from `src/docker-compose.yml`:
+OpenClaw now runs as per-user OpenShell sandboxes managed by OpenShell Gateway — not as a standalone docker-compose service. The openshell-bridge (`src/openshell-bridge/`) routes traffic to sandboxes automatically.
+
+To run supporting services locally:
 
 ```
-docker compose -f src/docker-compose.yml up -d          # start
-docker compose -f src/docker-compose.yml down            # stop
-docker compose -f src/docker-compose.yml logs -f         # follow logs
-docker restart trinity-openclaw                          # restart gateway only
+docker compose -f src/docker-compose.yml up -d
 ```
-
-Services:
-- `trinity-openclaw` — OpenClaw Gateway on port 18789
-- `trinity-nginx` — serves Flutter shell on port 80, proxies WS/API to gateway
 
 ## CLI Inside the Container
 

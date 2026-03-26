@@ -123,7 +123,8 @@ services:
         limits:
           memory: 256M
     depends_on:
-      - loki
+      loki:
+        condition: service_healthy
     networks:
       - trinity
 
@@ -133,6 +134,11 @@ services:
     container_name: trinity-fluentd
     restart: unless-stopped
     # Port NOT exposed to host -- only internal services send logs
+    healthcheck:
+      test: ["CMD-SHELL", "fluent-cat --none health.check || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     deploy:
       resources:
         limits:

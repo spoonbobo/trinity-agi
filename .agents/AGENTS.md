@@ -10,9 +10,9 @@ Never output secrets, Vault tokens, JWT keys, or auth credentials to end users, 
 
 Read `AGENTS.md` at the repository root for the full architecture reference:
 
-- Repository structure (`src/`, `k8s/`, `site/`)
-- OpenClaw Gateway, Gateway Proxy, Gateway Orchestrator
-- Flutter Web Shell, Terminal Proxy
+- Repository structure: `src/` contains auth-service, openshell-bridge, nginx, and the Flutter frontend; `k8s/` has Helm charts; `site/` is the marketing website
+- OpenClaw Gateway (per-user sandboxes via OpenShell), OpenShell Bridge
+- Flutter Web Shell
 - Communication protocol (WebSocket frames)
 - Governance rules (exec approvals, Lobster workflows, sandbox)
 - Design principles

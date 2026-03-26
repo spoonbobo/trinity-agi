@@ -17,10 +17,19 @@ spec:
       labels:
         {{- include "trinity.componentLabels" (dict "component" "supabase-db" "Release" .Release "Chart" .Chart) | nindent 8 }}
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: false
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: supabase-db
           image: {{ include "trinity.image" (dict "image" .Values.supabaseDb.image "global" .Values.global) }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              add: ["CHOWN", "FOWNER", "SETUID", "SETGID", "DAC_OVERRIDE"]
           ports:
             - containerPort: 5432
               name: postgres
@@ -79,6 +88,7 @@ metadata:
     helm.sh/hook-weight: "-5"
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
+  ttlSecondsAfterFinished: 300
   backoffLimit: 10
   template:
     metadata:

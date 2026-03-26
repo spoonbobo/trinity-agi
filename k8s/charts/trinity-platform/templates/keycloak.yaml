@@ -23,10 +23,17 @@ spec:
         vault.hashicorp.com/agent-inject-secret-supabase: "secret/data/trinity/supabase"
       {{- end }}
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: false
+        seccompProfile:
+          type: RuntimeDefault
       initContainers:
         - name: wait-for-keycloak-schema
           image: {{ include "trinity.image" (dict "image" .Values.supabaseDb.image "global" .Values.global) }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
           env:
             - name: PGPASSWORD
               valueFrom:
@@ -45,10 +52,19 @@ spec:
                 echo "[wait-for-keycloak-schema] waiting for keycloak schema..."
                 sleep 2
               done
+          resources:
+            limits:
+              memory: 64Mi
+              cpu: 100m
+            requests:
+              memory: 32Mi
+              cpu: 50m
       containers:
         - name: keycloak
           image: {{ include "trinity.image" (dict "image" .Values.keycloak.image "global" .Values.global) }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
           command: ["/opt/keycloak/bin/kc.sh"]
           args: ["start-dev", "--import-realm"]
           ports:
@@ -64,6 +80,11 @@ spec:
                 secretKeyRef:
                   name: trinity-secrets
                   key: KEYCLOAK_ADMIN_PASSWORD
+            - name: KC_TRINITY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: trinity-secrets
+                  key: KEYCLOAK_CLIENT_SECRET
             - name: KC_DB
               value: "postgres"
             - name: KC_DB_URL
@@ -128,6 +149,12 @@ spec:
             - name: realm-import
               mountPath: /opt/keycloak/data/import
               readOnly: true
+          startupProbe:
+            httpGet:
+              path: /keycloak/realms/master
+              port: 8080
+            failureThreshold: 30
+            periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /keycloak/realms/master

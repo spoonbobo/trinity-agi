@@ -23,10 +23,22 @@ spec:
         vault.hashicorp.com/agent-inject-secret-orchestrator: "secret/data/trinity/orchestrator"
       {{- end }}
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: auth-service
           image: {{ include "trinity.image" (dict "image" .Values.authService.image "global" .Values.global) }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           ports:
             - containerPort: {{ .Values.authService.port }}
               name: http
@@ -80,9 +92,9 @@ spec:
                 secretKeyRef:
                   name: trinity-superadmin
                   key: SUPERADMIN_ALLOWLIST
-            # Orchestrator URL for per-user gateway provisioning
+            # OpenShell bridge compat API (replaces gateway-orchestrator)
             - name: ORCHESTRATOR_URL
-              value: "http://gateway-orchestrator:{{ .Values.gatewayOrchestrator.port }}"
+              value: "http://openshell-bridge:{{ .Values.openshellBridge.port }}"
             - name: ORCHESTRATOR_SERVICE_TOKEN
               valueFrom:
                 secretKeyRef:

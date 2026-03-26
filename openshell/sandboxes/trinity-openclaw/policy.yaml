@@ -1,0 +1,95 @@
+# Trinity OpenClaw sandbox policy for OpenShell
+# Extends the base OpenClaw policy with Trinity-specific permissions.
+
+version: 1
+
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /proc
+    - /dev/urandom
+    - /app
+    - /etc
+    - /var/log
+    - /opt/trinity-seed
+  read_write:
+    - /sandbox
+    - /tmp
+    - /dev/null
+
+landlock:
+  compatibility: best_effort
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+network_policies:
+  openclaw_gateway:
+    name: openclaw-gateway
+    endpoints:
+      - { host: "*.openclaw.ai", port: 443 }
+      - { host: docs.openclaw.ai, port: 443 }
+      - { host: registry.npmjs.org, port: 443 }
+    binaries:
+      - { path: /usr/bin/node }
+      - { path: /usr/local/bin/openclaw }
+
+  trinity_services:
+    name: trinity-internal
+    endpoints:
+      - { host: auth-service, port: 18791 }
+      - { host: supabase-auth, port: 9999 }
+      - { host: nginx, port: 80 }
+    binaries:
+      - { path: /usr/bin/node }
+      - { path: /usr/bin/curl }
+
+  llm_providers:
+    name: llm-providers
+    endpoints:
+      - { host: api.anthropic.com, port: 443 }
+      - { host: api.openai.com, port: 443 }
+      - { host: openrouter.ai, port: 443 }
+      - { host: api.poe.com, port: 443 }
+      - { host: api.deepinfra.com, port: 443 }
+      - { host: kimi.moonshot.cn, port: 443 }
+      - { host: api.moonshot.cn, port: 443 }
+      - { host: integrate.api.nvidia.com, port: 443 }
+    binaries:
+      - { path: /usr/bin/node }
+      - { path: /usr/local/bin/openclaw }
+
+  web_tools:
+    name: web-tools
+    endpoints:
+      - { host: api.search.brave.com, port: 443 }
+    binaries:
+      - { path: /usr/bin/node }
+      - { path: /usr/local/bin/openclaw }
+
+  github:
+    name: github
+    endpoints:
+      - { host: github.com, port: 443 }
+      - { host: api.github.com, port: 443 }
+      - { host: raw.githubusercontent.com, port: 443 }
+      - { host: ghcr.io, port: 443 }
+    binaries:
+      - { path: /usr/bin/git }
+      - { path: /usr/bin/gh }
+      - { path: /usr/bin/node }
+
+  messaging:
+    name: messaging-channels
+    endpoints:
+      - { host: web.whatsapp.com, port: 443 }
+      - { host: "*.whatsapp.net", port: 443 }
+      - { host: api.telegram.org, port: 443 }
+      - { host: discord.com, port: 443 }
+      - { host: gateway.discord.gg, port: 443 }
+    binaries:
+      - { path: /usr/bin/node }
+      - { path: /usr/local/bin/openclaw }

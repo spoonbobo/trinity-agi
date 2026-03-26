@@ -18,10 +18,17 @@ spec:
       labels:
         {{- include "trinity.componentLabels" (dict "component" "loki" "Release" .Release "Chart" .Chart) | nindent 8 }}
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: loki
           image: {{ include "trinity.image" (dict "image" .Values.loki.image "global" .Values.global) }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
           args:
             - -config.file=/etc/loki/local-config.yaml
             - -validation.allow-structured-metadata=false
@@ -107,10 +114,17 @@ spec:
         vault.hashicorp.com/agent-inject-secret-grafana: "secret/data/trinity/grafana"
       {{- end }}
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: false
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: grafana
           image: {{ include "trinity.image" (dict "image" .Values.grafana.image "global" .Values.global) }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
           ports:
             - containerPort: 3000
               name: http
@@ -223,6 +237,11 @@ spec:
         {{- include "trinity.componentLabels" (dict "component" "fluentd" "Release" .Release "Chart" .Chart) | nindent 8 }}
     spec:
       serviceAccountName: default
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: false
+        seccompProfile:
+          type: RuntimeDefault
       tolerations:
         - operator: Exists
       containers:
@@ -233,6 +252,9 @@ spec:
             runAsUser: 0
             runAsGroup: 0
             allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           env:
             - name: NODE_NAME
               valueFrom:

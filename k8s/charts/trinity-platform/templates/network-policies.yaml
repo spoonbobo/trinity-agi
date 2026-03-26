@@ -1,0 +1,192 @@
+{{- /* Default deny all ingress — each service must explicitly allow its clients */ -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+
+---
+# nginx: accepts from ingress controller + any external traffic
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-nginx
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: nginx
+  ingress:
+    - {}
+
+---
+# auth-service: from nginx only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-auth-service
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: auth-service
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: nginx
+
+---
+# openshell-bridge: from nginx, auth-service
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-openshell-bridge
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: openshell-bridge
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: nginx
+        - podSelector:
+            matchLabels:
+              app: auth-service
+
+---
+# supabase-db: from auth-service, supabase-auth, keycloak
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-supabase-db
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: supabase-db
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: auth-service
+        - podSelector:
+            matchLabels:
+              app: supabase-auth
+        - podSelector:
+            matchLabels:
+              app: keycloak
+      ports:
+        - port: 5432
+          protocol: TCP
+
+---
+# supabase-auth: from nginx, auth-service
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-supabase-auth
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: supabase-auth
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: nginx
+        - podSelector:
+            matchLabels:
+              app: auth-service
+
+---
+# keycloak: from nginx, supabase-auth
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-keycloak
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: keycloak
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: nginx
+        - podSelector:
+            matchLabels:
+              app: supabase-auth
+
+---
+# vault: from vault-init/vault-sync jobs, auth-service
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-vault
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: vault
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - port: 8200
+          protocol: TCP
+
+---
+# loki: from grafana, fluentd
+{{- if .Values.loki.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-loki
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: loki
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: grafana
+        - podSelector:
+            matchLabels:
+              app: fluentd
+      ports:
+        - port: 3100
+          protocol: TCP
+{{- end }}
+
+---
+# grafana: from nginx
+{{- if .Values.grafana.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-grafana
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: grafana
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: nginx
+      ports:
+        - port: 3000
+          protocol: TCP
+{{- end }}

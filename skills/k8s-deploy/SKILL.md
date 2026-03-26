@@ -10,21 +10,18 @@ metadata:
 
 ## What This Skill Covers
 
-Multi-tenant Kubernetes deployment for Trinity AGI. Each user gets an isolated OpenClaw gateway pod with its own state, sessions, and workspace. Shared platform services (DB, auth, Keycloak, Vault, monitoring) run once; per-user OpenClaw instances are provisioned on-demand by the gateway-orchestrator.
+Multi-tenant Kubernetes deployment for Trinity AGI. Each user gets an isolated OpenClaw sandbox with its own state, sessions, and workspace. Shared platform services (DB, auth, Keycloak, Vault, monitoring) run once; per-user OpenClaw sandboxes are managed by OpenShell Gateway.
 
-Source: `k8s/charts/`, `src/gateway-orchestrator/`, `src/gateway-proxy/`, `src/docker-compose.yml` (legacy, deprecated)
+Source: `k8s/charts/`, `src/openshell-bridge/`, `src/docker-compose.yml` (legacy, deprecated)
 
 ## Architecture
 
 ```
-Browser -> Ingress -> nginx -> gateway-proxy:18800
+Browser -> Ingress -> nginx -> openshell-bridge:18800
                                   |
-                      Parses JWT, resolves user -> pod
+                      Parses JWT, routes to OpenShell sandbox
                                   |
-                         openclaw-{userId}:18789  (per-user pods)
-                                  |
-                      gateway-orchestrator:18801
-                         (manages pod lifecycle)
+                         OpenShell Gateway (manages per-user sandboxes)
                                   |
                       PostgreSQL (rbac.tenants table)
 ```
@@ -38,15 +35,13 @@ Browser -> Ingress -> nginx -> gateway-proxy:18800
 | keycloak | 8080 | quay.io/keycloak/keycloak:26.1 | 1 | IdP broker (LDAP/AD/OIDC) |
 | vault | 8200 | hashicorp/vault:1.15 | 1 | Secrets management |
 | auth-service | 18791 | ghcr.io/spoonbobo/trinity/auth-service | 1 | JWT verify + RBAC + pod provisioning trigger |
-| gateway-orchestrator | 18801 | ghcr.io/spoonbobo/trinity/gateway-orchestrator | 1-2 | Per-user pod lifecycle (create/delete/status) |
-| gateway-proxy | 18800 | ghcr.io/spoonbobo/trinity/gateway-proxy | 2+ (HPA) | Routes users to their OpenClaw pods |
-| terminal-proxy | 18790 | ghcr.io/spoonbobo/trinity/terminal-proxy | 1 | kubectl exec into per-user pods |
+| openshell-bridge | 18800 | ghcr.io/spoonbobo/trinity/openshell-bridge | 2+ (HPA) | Routes users to OpenClaw sandboxes via OpenShell Gateway |
 | nginx | 80 | nginx:1.27-alpine | 1 | Reverse proxy + SPA host (app subdomain) |
 | site | 3000 | ghcr.io/spoonbobo/trinity/site | 1-2 | Marketing site + docs (Next.js, site subdomain) |
 | loki | 3100 | grafana/loki:3.4.2 | 1 (StatefulSet) | Log aggregation |
 | grafana | 3000 | grafana/grafana:11.5.2 | 1 | Monitoring dashboards |
 | fluentd | - | fluent/fluentd:v1.16-1 | DaemonSet | Log collection |
-| openclaw-{userId} | 18789 | ghcr.io/spoonbobo/trinity/openclaw | 1 per user | Per-user AI gateway |
+| openclaw-{userId} | 18789 | (OpenShell sandbox) | 1 per user | Per-user AI gateway (managed by OpenShell Gateway) |
 
 ## Helm Charts
 
@@ -60,11 +55,9 @@ helm install trinity k8s/charts/trinity-platform \
   -f k8s/charts/trinity-platform/values.minikube.yaml
 ```
 
-### openclaw-instance (per-user, managed by orchestrator)
+### Per-user OpenClaw sandboxes
 
-Do NOT install manually. The gateway-orchestrator creates these programmatically via K8s API when users log in.
-
-Source: `k8s/charts/openclaw-instance/`
+Per-user OpenClaw instances are now managed by OpenShell Gateway as sandboxes — no separate Helm chart or manual provisioning required.
 
 ## Subdomain Routing
 
@@ -90,14 +83,13 @@ All routes below are on the **app subdomain** (`app.trinity.work`):
 | Route | Backend | Protocol | Notes |
 |-------|---------|----------|-------|
 | `/` | Flutter SPA (static) | HTTP | try_files |
-| `/ws` | gateway-proxy:18800 | WebSocket | Proxy routes to per-user pod |
-| `/terminal/` | terminal-proxy:18790 | WebSocket | kubectl exec into per-user pod |
+| `/ws` | openshell-bridge:18800 | WebSocket | Routes to per-user OpenClaw sandbox |
 | `/auth/` | auth-service:18791 | HTTP | RBAC + pod provisioning |
 | `/supabase/auth/` | supabase-auth:9999 | HTTP | GoTrue auth |
 | `/keycloak/` | keycloak:8080 | HTTP | IdP broker |
-| `/__openclaw__/*` | gateway-proxy:18800 | HTTP/WS | Proxy routes to per-user pod |
-| `/v1/` | gateway-proxy:18800 | HTTP | OpenAI-compatible API |
-| `/tools/` | gateway-proxy:18800 | HTTP | Tool catalog |
+| `/__openclaw__/*` | openshell-bridge:18800 | HTTP/WS | Routes to per-user OpenClaw sandbox |
+| `/v1/` | openshell-bridge:18800 | HTTP | OpenAI-compatible API |
+| `/tools/` | openshell-bridge:18800 | HTTP | Tool catalog |
 
 ## Secrets Management (Vault Agent Injector)
 
@@ -107,9 +99,9 @@ All secrets are stored in HashiCorp Vault and injected into pods via Vault Agent
 
 | Path | Keys | Used by |
 |------|------|---------|
-| `secret/trinity/supabase` | jwt_secret, anon_key, postgres_password | supabase-auth, auth-service, terminal-proxy, gateway-orchestrator |
+| `secret/trinity/supabase` | jwt_secret, anon_key, postgres_password | supabase-auth, auth-service, openshell-bridge |
 | `secret/trinity/keycloak` | admin_password, client_secret | keycloak, supabase-auth |
-| `secret/trinity/orchestrator` | service_token | gateway-orchestrator, gateway-proxy, auth-service, terminal-proxy |
+| `secret/trinity/openshell` | service_token | openshell-bridge, auth-service |
 | `secret/trinity/grafana` | password | grafana |
 | `secret/trinity/superadmin` | allowlist, enabled, email, password | auth-service |
 
@@ -145,7 +137,7 @@ vault kv put secret/trinity/keycloak \
   admin_password="$(openssl rand -hex 16)" \
   client_secret="$(openssl rand -hex 32)"
 
-vault kv put secret/trinity/orchestrator \
+vault kv put secret/trinity/openshell \
   service_token="$(openssl rand -hex 32)"
 
 vault kv put secret/trinity/grafana \
@@ -173,16 +165,13 @@ eval $(minikube docker-env)
 # Or build and push to GHCR (for production):
 REGISTRY=ghcr.io/spoonbobo/trinity
 
-docker build -t $REGISTRY/openclaw:latest -f src/Dockerfile.openclaw src/
 docker build -t $REGISTRY/auth-service:latest src/auth-service/
-docker build -t $REGISTRY/terminal-proxy:latest src/terminal-proxy/
-docker build -t $REGISTRY/gateway-orchestrator:latest src/gateway-orchestrator/
-docker build -t $REGISTRY/gateway-proxy:latest src/gateway-proxy/
+docker build -t $REGISTRY/openshell-bridge:latest src/openshell-bridge/
 docker build -t $REGISTRY/frontend:latest src/frontend/
 docker build -t $REGISTRY/site:latest site/
 
 # Push
-for img in openclaw auth-service terminal-proxy gateway-orchestrator gateway-proxy frontend site; do
+for img in auth-service openshell-bridge frontend site; do
   docker push $REGISTRY/$img:latest
 done
 ```
@@ -195,11 +184,8 @@ minikube start --memory 16384 --cpus 4 --driver=docker
 
 # 2. Build images inside minikube
 eval $(minikube docker-env)
-docker build -t openclaw:trinity -f src/Dockerfile.openclaw src/
 docker build -t trinity-auth-service:latest src/auth-service/
-docker build -t trinity-terminal-proxy:latest src/terminal-proxy/
-docker build -t trinity-gateway-orchestrator:latest src/gateway-orchestrator/
-docker build -t trinity-gateway-proxy:latest src/gateway-proxy/
+docker build -t trinity-openshell-bridge:latest src/openshell-bridge/
 docker build -t trinity-frontend:latest src/frontend/
 docker build -t trinity-site:latest site/
 
@@ -251,7 +237,7 @@ Single PostgreSQL instance (`supabase-db`), multi-schema:
 
 | Schema | Used by | Tables |
 |--------|---------|--------|
-| `rbac` | auth-service, gateway-orchestrator | roles, permissions, role_permissions, user_roles, audit_log, **tenants** |
+| `rbac` | auth-service, openshell-bridge | roles, permissions, role_permissions, user_roles, audit_log, **tenants** |
 | `auth` | GoTrue/supabase-auth | users, sessions, refresh_tokens, etc. |
 | `keycloak` | Keycloak | realm config, IdP state, etc. |
 
@@ -261,13 +247,12 @@ Migrations: `src/supabase/migrations/001-005*.sql` (run on first DB start)
 
 1. User logs in via Flutter shell (email/password or Keycloak SSO)
 2. Frontend calls `POST /auth/session` with JWT
-3. Auth-service calls gateway-orchestrator `POST /provision` with userId
-4. Orchestrator creates: K8s Secret, ConfigMap, PVC (5Gi), Service, Deployment
-5. Pod starts OpenClaw gateway with unique token
-6. Frontend polls `GET /auth/gateway-status` until pod is ready
-7. Frontend connects WebSocket to `/ws` with JWT
-8. Gateway-proxy resolves userId -> pod, rewrites connect frame auth token
-9. User now has a fully isolated OpenClaw instance
+3. Auth-service provisions an OpenShell sandbox for the user
+4. OpenShell Gateway creates the sandbox with isolated state and workspace
+5. Frontend polls `GET /auth/gateway-status` until sandbox is ready
+6. Frontend connects WebSocket to `/ws` with JWT
+7. OpenShell Bridge routes traffic to the user's sandbox
+8. User now has a fully isolated OpenClaw instance
 
 ## Troubleshooting
 
@@ -277,14 +262,9 @@ kubectl describe pod -l trinity.work/user-id=<userId> -n trinity
 kubectl logs -l trinity.work/user-id=<userId> -n trinity --tail=30
 ```
 
-**Orchestrator issues:**
+**Bridge routing issues:**
 ```bash
-kubectl logs deploy/gateway-orchestrator -n trinity --tail=30
-```
-
-**Proxy routing issues:**
-```bash
-kubectl logs deploy/gateway-proxy -n trinity --tail=30
+kubectl logs deploy/openshell-bridge -n trinity --tail=30
 ```
 
 **Gateway unhealthy (per-user pod):**

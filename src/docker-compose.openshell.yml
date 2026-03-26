@@ -1,0 +1,52 @@
+# Docker Compose override for OpenShell mode.
+# Use with: docker compose -f docker-compose.yml -f docker-compose.openshell.yml up -d
+#
+# This override:
+# 1. Disables gateway-orchestrator, gateway-proxy, terminal-proxy, openclaw-gateway
+# 2. Adds the openshell-bridge service
+# 3. Switches nginx to the OpenShell-compatible config
+#
+# Prerequisites:
+# - OpenShell gateway running: openshell gateway start --name trinity-openshell
+# - Trinity sandbox image built: ./openshell/sandboxes/trinity-openclaw/build.sh
+
+services:
+  # Disable replaced services by setting scale to 0
+  openclaw-gateway:
+    deploy:
+      replicas: 0
+
+  terminal-proxy:
+    deploy:
+      replicas: 0
+
+  # Add OpenShell bridge (replaces gateway-proxy + terminal-proxy)
+  openshell-bridge:
+    build:
+      context: ./openshell-bridge
+      dockerfile: Dockerfile
+    container_name: trinity-openshell-bridge
+    restart: unless-stopped
+    environment:
+      - BRIDGE_PORT=18800
+      - JWT_SECRET=${SUPABASE_JWT_SECRET:?Set SUPABASE_JWT_SECRET in .env}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost}
+      - OPENSHELL_SANDBOX_IMAGE=trinity-openclaw-sandbox:latest
+      - OPENSHELL_GATEWAY_ENDPOINT=https://host.docker.internal:8080
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:18800/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    networks:
+      - trinity
+
+  # Switch nginx to OpenShell-compatible config
+  nginx:
+    volumes:
+      - flutter-build:/usr/share/nginx/html:ro
+      - ./nginx/nginx.openshell.conf:/etc/nginx/nginx.conf:ro

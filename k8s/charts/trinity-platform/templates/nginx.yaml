@@ -19,10 +19,19 @@ spec:
       annotations:
         checksum/nginx-config: {{ include (print $.Template.BasePath "/configmaps.yaml") . | sha256sum }}
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: false
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: nginx
           image: {{ include "trinity.image" (dict "image" .Values.nginx.image "global" .Values.global) }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              add: ["CHOWN", "SETUID", "SETGID", "NET_BIND_SERVICE"]
           ports:
             - containerPort: 80
               name: http
@@ -61,10 +70,22 @@ spec:
         - name: frontend-copy
           image: {{ include "trinity.image" (dict "image" .Values.frontend.image "global" .Values.global) }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           command: ["sh", "-c", "cp -r /app/build/web/* /frontend/ 2>/dev/null || echo 'WARN: no frontend build found'"]
           volumeMounts:
             - name: frontend
               mountPath: /frontend
+          resources:
+            limits:
+              memory: 128Mi
+              cpu: 200m
+            requests:
+              memory: 64Mi
+              cpu: 100m
 ---
 apiVersion: v1
 kind: Service

@@ -134,58 +134,19 @@ authService:
       memory: 128Mi
       cpu: 100m
 
-# ─── Gateway Orchestrator (new) ───────────────────────────────────────────
-gatewayOrchestrator:
-  image: trinity-gateway-orchestrator:latest
-  port: 18801
-  replicas: 1
-  resources:
-    limits:
-      memory: 256Mi
-    requests:
-      memory: 128Mi
-      cpu: 100m
-  # Helm chart path for openclaw-instance (mounted into orchestrator pod)
-  openclawChartPath: /charts/openclaw-instance
-
-# ─── Gateway Proxy (new) ──────────────────────────────────────────────────
-gatewayProxy:
-  image: trinity-gateway-proxy:latest
+# ─── OpenShell Bridge (replaces gateway-orchestrator, gateway-proxy, terminal-proxy, copilot) ───
+openshellBridge:
+  image: trinity-openshell-bridge:latest
   port: 18800
-  replicas: 2
+  sandboxImage: "openclaw"
+  sandboxEndpointPattern: "http://host.docker.internal:18789"
+  gatewayEndpoint: "https://host.docker.internal:8080"
   resources:
     limits:
-      memory: 512Mi
-    requests:
-      memory: 256Mi
-      cpu: 250m
-  # Cache TTL for user->backend resolution (seconds)
-  resolverCacheTTL: 30
-
-# ─── Terminal Proxy ────────────────────────────────────────────────────────
-terminalProxy:
-  image: trinity-terminal-proxy:latest
-  port: 18790
-  resources:
-    limits:
-      memory: 256Mi
-    requests:
       memory: 128Mi
-      cpu: 100m
-
-# ─── Copilot ───────────────────────────────────────────────────────────────
-copilot:
-  image: trinity-copilot:latest
-  port: 18802
-  replicas: 1
-  opencodePort: 4096
-  defaultModel: "moonshotai/kimi-k2.5"
-  resources:
-    limits:
-      memory: 1Gi
     requests:
-      memory: 512Mi
-      cpu: 100m
+      memory: 64Mi
+      cpu: 50m
 
 # ─── LightRAG ───────────────────────────────────────────────────────────────
 lightrag:

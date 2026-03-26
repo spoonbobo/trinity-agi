@@ -33,10 +33,17 @@ spec:
         checksum/lightrag-secrets: {{ printf "%s|%s|%s" .Values.secrets.lightragInternalToken .Values.secrets.lightragLlmApiKey .Values.secrets.lightragEmbeddingApiKey | sha256sum }}
         checksum/lightrag-config: {{ printf "%s|%s|%s|%v|%v|%s|%s" .Values.lightrag.llmModel .Values.lightrag.llmBaseUrl .Values.lightrag.embeddingModel .Values.lightrag.embeddingDim .Values.lightrag.embeddingMaxTokens .Values.lightrag.defaultQueryMode (.Values.lightrag.enableRerank | quote) | sha256sum }}
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: false
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: lightrag
           image: {{ include "trinity.image" (dict "image" .Values.lightrag.image "global" .Values.global) }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
           ports:
             - containerPort: {{ .Values.lightrag.port }}
               name: http

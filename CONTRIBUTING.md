@@ -10,8 +10,7 @@
 
 - `src/frontend/` -- Flutter web shell (Dart)
 - `src/nginx/` -- Reverse proxy config
-- `src/terminal-proxy/` -- WebSocket terminal proxy (Node.js)
-- `src/scripts/` -- Bootstrap and test scripts
+- `src/openshell-bridge/` -- WebSocket/HTTP bridge to OpenShell Gateway (Go)
 - `src/skills/` -- Bundled agent skills
 - `src/cron-templates/` -- Bundled cron templates
 - `site/` -- Marketing website (Next.js)
@@ -43,23 +42,18 @@ Edit `src/nginx/nginx.conf`, then:
 docker compose -f src/docker-compose.yml restart nginx
 ```
 
-### Terminal proxy
+### OpenShell Bridge
 
-Edit files in `src/terminal-proxy/`, then:
+Edit files in `src/openshell-bridge/`, then:
 
 ```bash
-docker compose -f src/docker-compose.yml build terminal-proxy
-docker compose -f src/docker-compose.yml up -d terminal-proxy
+docker compose -f src/docker-compose.yml build openshell-bridge
+docker compose -f src/docker-compose.yml up -d openshell-bridge
 ```
 
 ### OpenClaw gateway
 
-The gateway image is built from `src/Dockerfile.openclaw`. To rebuild:
-
-```bash
-docker compose -f src/docker-compose.yml build openclaw-gateway
-docker compose -f src/docker-compose.yml up -d openclaw-gateway
-```
+OpenClaw now runs as an OpenShell sandbox (not a docker-compose service). The bridge connects to OpenShell Gateway which manages per-user sandboxes automatically.
 
 ## Submitting changes
 

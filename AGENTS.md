@@ -6,20 +6,18 @@ Trinity AGI is a "featureless" Universal Command Center. It is a host, not an ap
 
 ## Repository Structure
 
-- **`src/`** — The command center application (Flutter frontend, backend services, Dockerfiles).
+- **`src/`** — The command center application (Flutter frontend, openshell-bridge, auth-service, nginx, Dockerfiles).
 - **`k8s/`** — Helm charts for Kubernetes deployment (`trinity-platform` shared services + `openclaw-instance` per-user pods).
 - **`site/`** — The public marketing website (Next.js, Tailwind CSS, dark theme).
 
 ## Architecture
 
-Trinity AGI is deployed on Kubernetes. Each user gets an isolated OpenClaw gateway pod.
+Trinity AGI is deployed on Kubernetes. Each user gets an isolated OpenClaw sandbox managed by OpenShell Gateway.
 
-- **OpenClaw Gateway** (per-user) is the AI backend. Each user gets their own pod with isolated state, sessions, and workspace. Do not build a separate backend. Do not call LLM APIs directly. All agent logic flows through OpenClaw.
-- **Gateway Proxy** (Go) routes WebSocket/HTTP traffic to the correct per-user OpenClaw pod based on JWT authentication.
-- **Gateway Orchestrator** (Go) manages the lifecycle of per-user pods (provision, deprovision, health checks) via K8s API.
-- **Flutter Web Shell** is the frontend. It connects via WebSocket through the gateway-proxy. Auth is JWT-based (no compile-time gateway token).
-- **Terminal Proxy** provides browser-safe OpenClaw CLI execution via `kubectl exec` into per-user pods.
-- **nginx** serves the built Flutter app and reverse-proxies all routes through the gateway-proxy.
+- **OpenClaw Gateway** (per-user) is the AI backend. Each user gets their own sandbox with isolated state, sessions, and workspace. Do not build a separate backend. Do not call LLM APIs directly. All agent logic flows through OpenClaw.
+- **OpenShell Bridge** (Go) routes WebSocket/HTTP traffic to per-user OpenClaw sandboxes via OpenShell Gateway. Handles JWT authentication, session routing, and terminal access.
+- **Flutter Web Shell** is the frontend. It connects via WebSocket through the openshell-bridge. Auth is JWT-based (no compile-time gateway token).
+- **nginx** serves the built Flutter app and reverse-proxies all routes through the openshell-bridge.
 - **Vault** (with Agent Injector) manages all secrets. No `.env` files in production.
 
 ## Deployment

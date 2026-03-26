@@ -14,6 +14,7 @@ metadata:
     helm.sh/hook-weight: "1"
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
+  ttlSecondsAfterFinished: 300
   backoffLimit: 3
   template:
     metadata:
@@ -24,7 +25,7 @@ spec:
       serviceAccountName: vault-sync
       containers:
         - name: vault-sync
-          image: bitnami/kubectl:latest
+          image: bitnami/kubectl:1.31
           command: ["/bin/bash", "/scripts/sync.sh"]
           env:
             - name: VAULT_ADDR
